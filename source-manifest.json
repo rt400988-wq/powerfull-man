@@ -1,0 +1,92 @@
+[
+  {
+    "source_archive": "SIP.js-main.zip",
+    "destination": "SIP.js-main",
+    "files": 1423,
+    "unpacked_bytes": 3030053
+  },
+  {
+    "source_archive": "SuiteCRM-hotfix.zip",
+    "destination": "SuiteCRM-hotfix",
+    "files": 9155,
+    "unpacked_bytes": 65789295
+  },
+  {
+    "source_archive": "TTS-dev.zip",
+    "destination": "TTS-dev",
+    "files": 725,
+    "unpacked_bytes": 39020717
+  },
+  {
+    "source_archive": "TTS-master.zip",
+    "destination": "TTS-master",
+    "files": 326,
+    "unpacked_bytes": 27546482
+  },
+  {
+    "source_archive": "asterisk-master.zip",
+    "destination": "asterisk-master",
+    "files": 2129,
+    "unpacked_bytes": 44288235
+  },
+  {
+    "source_archive": "email-verifier-main.zip",
+    "destination": "email-verifier-main",
+    "files": 50,
+    "unpacked_bytes": 3402466
+  },
+  {
+    "source_archive": "erpnext-develop.zip",
+    "destination": "erpnext-develop",
+    "files": 5838,
+    "unpacked_bytes": 161564720
+  },
+  {
+    "source_archive": "freeswitch-master.zip",
+    "destination": "freeswitch-master",
+    "files": 5172,
+    "unpacked_bytes": 107347792
+  },
+  {
+    "source_archive": "mautic-7.x.zip",
+    "destination": "mautic-7.x",
+    "files": 7176,
+    "unpacked_bytes": 79216928
+  },
+  {
+    "source_archive": "playwright-main.zip",
+    "destination": "playwright-main",
+    "files": 3128,
+    "unpacked_bytes": 69800060
+  },
+  {
+    "source_archive": "postal-main.zip",
+    "destination": "postal-main",
+    "files": 597,
+    "unpacked_bytes": 2602702
+  },
+  {
+    "source_archive": "rasa-3.6.x.zip",
+    "destination": "rasa-3.6.x",
+    "files": 1387,
+    "unpacked_bytes": 31860235
+  },
+  {
+    "source_archive": "scrapy-master.zip",
+    "destination": "scrapy-master",
+    "files": 735,
+    "unpacked_bytes": 5915999
+  },
+  {
+    "source_archive": "vosk-api-master.zip",
+    "destination": "vosk-api-master",
+    "files": 272,
+    "unpacked_bytes": 4392844
+  },
+  {
+    "source_archive": "whatsapp-web.js-main.zip",
+    "destination": "whatsapp-web.js-main",
+    "files": 186,
+    "unpacked_bytes": 2593727
+  }
+]

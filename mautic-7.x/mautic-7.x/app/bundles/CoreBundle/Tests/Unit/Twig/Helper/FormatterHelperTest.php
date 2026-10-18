@@ -1,0 +1,226 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\CoreBundle\Tests\Unit\Twig\Helper;
+
+use Mautic\CoreBundle\Helper\CoreParametersHelper;
+use Mautic\CoreBundle\Twig\Helper\DateHelper;
+use Mautic\CoreBundle\Twig\Helper\FormatterHelper;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Exception;
+use Symfony\Contracts\Translation\TranslatorInterface;
+
+final class FormatterHelperTest extends \PHPUnit\Framework\TestCase
+{
+    /**
+     * @var \PHPUnit\Framework\MockObject\MockObject&TranslatorInterface
+     */
+    private \PHPUnit\Framework\MockObject\MockObject $translator;
+
+    private FormatterHelper $formatterHelper;
+
+    private string $previousTimeZone;
+
+    protected function setUp(): void
+    {
+        $this->previousTimeZone     = date_default_timezone_get();
+        $this->translator           = $this->createMock(TranslatorInterface::class);
+        $dateHelper                 = new DateHelper(
+            'F j, Y g:i a T',
+            'D, M d',
+            'F j, Y',
+            'g:i a',
+            $this->translator,
+            $this->createStub(CoreParametersHelper::class)
+        );
+        $this->formatterHelper               = new FormatterHelper($dateHelper, $this->translator);
+    }
+
+    protected function tearDown(): void
+    {
+        date_default_timezone_set($this->previousTimeZone);
+    }
+
+    public function testStrictHtmlFormatIsRemovingScriptTags(): void
+    {
+        $sample = '<a href="/s/webhooks/view/31" data-toggle="ajax">test</a> has been stopped because the response HTTP code was 410, which means the reciever doesn\'t want us to send more requests.<script>console.log(\'script is running\');</script><SCRIPT>console.log(\'CAPITAL script is running\');</SCRIPT>';
+
+        $expected = '<a href="/s/webhooks/view/31" data-toggle="ajax">test</a> has been stopped because the response HTTP code was 410, which means the reciever doesn\'t want us to send more requests.console.log(\'script is running\');console.log(\'CAPITAL script is running\');';
+
+        $result = $this->formatterHelper->_($sample, 'html');
+
+        $this->assertEquals($expected, $result);
+    }
+
+    public function testBooleanFormat(): void
+    {
+        $matcher = $this->exactly(2);
+        $this->translator->expects($matcher)
+            ->method('trans')->willReturnCallback(function (...$parameters) use ($matcher): string {
+                if (1 === $matcher->numberOfInvocations()) {
+                    $this->assertSame('mautic.core.yes', $parameters[0]);
+
+                    return 'yes';
+                }
+                if (2 === $matcher->numberOfInvocations()) {
+                    $this->assertSame('mautic.core.no', $parameters[0]);
+
+                    return 'no';
+                }
+
+                throw new Exception(sprintf('Method not be called for %dth time', $matcher->numberOfInvocations()));
+            });
+
+        $result = $this->formatterHelper->_(1, 'bool');
+        $this->assertEquals('yes', $result);
+
+        $result = $this->formatterHelper->_(0, 'bool');
+        $this->assertEquals('no', $result);
+    }
+
+    public function testFloatFormat(): void
+    {
+        $result = $this->formatterHelper->_(1.55, 'float');
+
+        $this->assertEquals('1.5500', $result);
+        $this->assertSame('string', gettype($result));
+    }
+
+    public function testIntFormat(): void
+    {
+        $result = $this->formatterHelper->_(10, 'int');
+
+        $this->assertSame('10', $result);
+        $this->assertSame('string', gettype($result));
+    }
+
+    #[DataProvider('stringProvider')]
+    public function testNormalizeStringValue(string|int|bool|\DateTime $input, string|int|bool|\DateTime $expected): void
+    {
+        date_default_timezone_set('Europe/Paris');
+        $this->assertEquals(
+            $expected,
+            $this->formatterHelper->normalizeStringValue($input)
+        );
+    }
+
+    /**
+     * @return iterable<array<mixed>>
+     */
+    public static function stringProvider(): iterable
+    {
+        // string
+        yield ['random string', 'random string'];
+
+        // integer
+        yield [1, 1];
+
+        // bool
+        yield [false, false];
+
+        // date
+        yield ['2020-02-02', '2020-02-02'];
+
+        // date time
+        yield ['2021-02-21 18:00:00', 'February 21, 2021 6:00 pm'];
+
+        // date object
+        yield [
+            \DateTime::createFromFormat('Y-m-d H:i:s', 'now', new \DateTimeZone('UTC')),
+            \DateTime::createFromFormat('Y-m-d H:i:s', 'now', new \DateTimeZone('UTC')),
+        ];
+    }
+
+    #[DataProvider('urlFormatProvider')]
+    public function testUrlFormat(string $url, string $expected): void
+    {
+        $result = $this->formatterHelper->_($url, 'url');
+        $this->assertEquals($expected, $result);
+    }
+
+    /**
+     * @return \Iterator<string, array<string>>
+     */
+    public static function urlFormatProvider(): \Iterator
+    {
+        yield 'normal url' => [
+            'http://example.com',
+            '<a href="http://example.com" target="_blank">http://example.com</a>',
+        ];
+        yield 'malicious url' => [
+            'http://example.com"><script>alert("XSS")</script>',
+            '<a href="http://example.com&#34;&#62;&#60;script&#62;alert(&#34;XSS&#34;)&#60;/script&#62;" target="_blank">http://example.com&#34;&#62;&#60;script&#62;alert(&#34;XSS&#34;)&#60;/script&#62;</a>',
+        ];
+        yield 'malicious url2' => [
+            'http://example.com?a="<b>test</b>',
+            '<a href="http://example.com?a=%22%3Cb%3Etest%3C%2Fb%3E" target="_blank">http://example.com?a=%22%3Cb%3Etest%3C%2Fb%3E</a>',
+        ];
+        yield 'url with single GET parameter' => [
+            'http://example.com/page?param=value',
+            '<a href="http://example.com/page?param=value" target="_blank">http://example.com/page?param=value</a>',
+        ];
+        yield 'url with multiple GET parameters' => [
+            'http://example.com/search?q=test&page=1&sort=desc',
+            '<a href="http://example.com/search?q=test&page=1&sort=desc" target="_blank">http://example.com/search?q=test&page=1&sort=desc</a>',
+        ];
+        yield 'url with encoded GET parameters' => [
+            'http://example.com/search?q=hello+world&lang=en',
+            '<a href="http://example.com/search?q=hello%20world&lang=en" target="_blank">http://example.com/search?q=hello%20world&lang=en</a>',
+        ];
+        yield 'url with special characters in GET parameters' => [
+            'http://example.com/path?param=value&special=!@#$%^&*()',
+            '<a href="http://example.com/path?param=value&special=%21%40#$%^&*()" target="_blank">http://example.com/path?param=value&special=%21%40#$%^&*()</a>',
+        ];
+        yield 'https url' => [
+            'https://secure.example.com',
+            '<a href="https://secure.example.com" target="_blank">https://secure.example.com</a>',
+        ];
+        yield 'url with port number' => [
+            'http://example.com:8080/path',
+            '<a href="http://example.com:8080/path" target="_blank">http://example.com:8080/path</a>',
+        ];
+        yield 'url with username and password' => [
+            'http://user:pass@example.com',
+            '<a href="http://user:pass@example.com" target="_blank">http://user:pass@example.com</a>',
+        ];
+        yield 'url with fragment identifier' => [
+            'http://example.com/page#section',
+            '<a href="http://example.com/page#section" target="_blank">http://example.com/page#section</a>',
+        ];
+    }
+
+    #[DataProvider('emailFormatProvider')]
+    public function testEmailFormat(string $email, string $expected): void
+    {
+        $result = $this->formatterHelper->_($email, 'email');
+        $this->assertEquals($expected, $result);
+    }
+
+    /**
+     * @return \Iterator<string, array<string>>
+     */
+    public static function emailFormatProvider(): \Iterator
+    {
+        yield 'normal email' => [
+            'user@example.com',
+            '<a href="mailto:user@example.com">user@example.com</a>',
+        ];
+        yield 'email with alias' => [
+            'user.one+test@example.com',
+            '<a href="mailto:user.one+test@example.com">user.one+test@example.com</a>',
+        ];
+        yield 'malicious email' => [
+            'user@example.com"><script>alert("XSS")</script>',
+            '<a href="mailto:user@example.com&#34;&#62;&#60;script&#62;alert(&#34;XSS&#34;)&#60;/script&#62;">user@example.com&#34;&#62;&#60;script&#62;alert(&#34;XSS&#34;)&#60;/script&#62;</a>',
+        ];
+    }
+
+    public function testArrayFormat(): void
+    {
+        $input    = ['<script>alert("XSS")</script>'];
+        $result   = $this->formatterHelper->_($input, 'array');
+        $expected = '&#60;script&#62;alert(&#34;XSS&#34;)&#60;/script&#62;';
+        $this->assertEquals($expected, $result);
+    }
+}

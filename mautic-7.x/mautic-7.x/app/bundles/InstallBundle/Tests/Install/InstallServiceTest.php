@@ -1,0 +1,485 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\InstallBundle\Tests\Install;
+
+use Doctrine\ORM\EntityManager;
+use Mautic\CoreBundle\Configurator\Configurator;
+use Mautic\CoreBundle\Configurator\Step\StepInterface;
+use Mautic\CoreBundle\Doctrine\Loader\FixturesLoaderInterface;
+use Mautic\CoreBundle\Helper\CacheHelper;
+use Mautic\CoreBundle\Helper\Filesystem;
+use Mautic\CoreBundle\Helper\PathsHelper;
+use Mautic\InstallBundle\Configurator\Step\CheckStep;
+use Mautic\InstallBundle\Install\InstallService;
+use Mautic\UserBundle\Entity\User;
+use Mautic\UserBundle\Entity\UserRepository;
+use PHPUnit\Framework\MockObject\MockObject;
+use Symfony\Component\HttpKernel\KernelInterface;
+use Symfony\Component\PasswordHasher\Hasher\UserPasswordHasher;
+use Symfony\Component\Validator\ConstraintViolationInterface;
+use Symfony\Component\Validator\ConstraintViolationList;
+use Symfony\Component\Validator\Validator\ValidatorInterface;
+use Symfony\Contracts\Translation\TranslatorInterface;
+
+final class InstallServiceTest extends \PHPUnit\Framework\TestCase
+{
+    /**
+     * @var MockObject&Configurator
+     */
+    private MockObject $configurator;
+
+    /**
+     * @var MockObject&CacheHelper
+     */
+    private MockObject $cacheHelper;
+
+    /**
+     * @var MockObject&PathsHelper
+     */
+    private MockObject $pathsHelper;
+
+    /**
+     * @var MockObject&TranslatorInterface
+     */
+    private MockObject $translator;
+
+    /**
+     * @var MockObject&ValidatorInterface
+     */
+    private MockObject $validator;
+
+    /**
+     * @var MockObject&UserRepository
+     */
+    private MockObject $userRepository;
+
+    private InstallService $installer;
+
+    private ?string $tempDir = null;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->configurator         = $this->createMock(Configurator::class);
+        $this->cacheHelper          = $this->createMock(CacheHelper::class);
+        $this->pathsHelper          = $this->createMock(PathsHelper::class);
+        $this->translator           = $this->createMock(TranslatorInterface::class);
+        $this->validator            = $this->createMock(ValidatorInterface::class);
+        $this->userRepository       = $this->createMock(UserRepository::class);
+
+        $this->installer = new InstallService(
+            $this->configurator,
+            $this->cacheHelper,
+            $this->pathsHelper,
+            $this->createStub(EntityManager::class),
+            $this->translator,
+            $this->createStub(KernelInterface::class),
+            $this->validator,
+            $this->createStub(UserPasswordHasher::class),
+            $this->createStub(FixturesLoaderInterface::class),
+            $this->userRepository,
+            new Filesystem()
+        );
+    }
+
+    public function testCheckIfInstalledWhenNoLocalConfig(): void
+    {
+        $this->pathsHelper->expects($this->once())
+            ->method('getSystemPath')
+            ->with('root', false)
+            ->willReturn(
+                __DIR__.'/../../../../../',
+            );
+
+        $this->assertFalse($this->installer->checkIfInstalled());
+    }
+
+    public function testGetStepWhenNoLocalConfig(): void
+    {
+        $this->pathsHelper->expects($this->once())
+            ->method('getSystemPath')
+            ->with('root', false)
+            ->willReturn(
+                __DIR__.'/../../../../../',
+            );
+
+        $this->configurator->expects($this->exactly(2))
+            ->method('getParameters')
+            ->willReturn(
+                []
+            );
+
+        $index = 0;
+        $step  = $this->createStub(StepInterface::class);
+
+        $this->configurator->expects($this->once())
+            ->method('getStep')
+            ->with($index)
+            ->willReturn([$step]);
+
+        $this->assertEquals($step, $this->installer->getStep($index));
+    }
+
+    public function testGetStepWhenDbDriverSet(): void
+    {
+        $this->pathsHelper->expects($this->once())
+            ->method('getSystemPath')
+            ->with('root', false)
+            ->willReturn(
+                __DIR__.'/../../../../../',
+            );
+
+        $this->configurator->expects($this->exactly(2))
+            ->method('getParameters')
+            ->willReturn(
+                ['db_driver' => 'test']
+            );
+
+        $index = 0;
+        $step  = $this->createStub(StepInterface::class);
+
+        $this->configurator->expects($this->once())
+            ->method('getStep')
+            ->with($index)
+            ->willReturn([$step]);
+
+        $this->assertEquals($step, $this->installer->getStep($index));
+    }
+
+    public function testCheckRequirements(): void
+    {
+        $step     = $this->createMock(StepInterface::class);
+        $messages = ['dummy' => 'test'];
+
+        $step->expects($this->once())
+            ->method('checkRequirements')
+            ->willReturn($messages);
+
+        $this->translator->expects($this->once())
+            ->method('trans')
+            ->with('test', [], null, null)
+            ->willReturn('test');
+
+        $this->assertSame($messages, $this->installer->checkRequirements($step));
+    }
+
+    public function testCheckOptionalSettings(): void
+    {
+        $step     = $this->createMock(StepInterface::class);
+        $messages = ['dummy' => 'test'];
+
+        $step->expects($this->once())
+            ->method('checkOptionalSettings')
+            ->willReturn($messages);
+
+        $this->translator->expects($this->once())
+            ->method('trans')
+            ->with('test', [], null, null)
+            ->willReturn('test');
+
+        $this->assertSame($messages, $this->installer->checkOptionalSettings($step));
+    }
+
+    public function testCheckOptionalSettingsPassesMemoryLimitParameter(): void
+    {
+        $step = $this->createMock(StepInterface::class);
+        $step->expects($this->once())
+            ->method('checkOptionalSettings')
+            ->willReturn(['mautic.install.memory.limit']);
+
+        $translated = 'The memory_limit setting is lower than the suggested minimum limit of 512M.';
+
+        $this->translator->expects($this->once())
+            ->method('trans')
+            ->with(
+                'mautic.install.memory.limit',
+                ['%min_memory_limit%' => CheckStep::RECOMMENDED_MEMORY_LIMIT],
+                null,
+                null
+            )
+            ->willReturn($translated);
+
+        $this->assertSame([$translated], $this->installer->checkOptionalSettings($step));
+    }
+
+    public function testSaveConfigurationWhenNoCacheClear(): void
+    {
+        $params     = [];
+        $step       = $this->createMock(StepInterface::class);
+        $clearCache = false;
+
+        $messages = [];
+
+        $step->expects($this->once())
+            ->method('update')
+            ->with($step)
+            ->willReturn($params);
+
+        $this->configurator->expects($this->once())
+            ->method('write');
+
+        $this->configurator->expects($this->once())
+            ->method('mergeParameters');
+
+        $this->assertSame($messages, $this->installer->saveConfiguration($params, $step, $clearCache));
+    }
+
+    public function testSaveConfigurationWhenCacheClear(): void
+    {
+        $params     = [];
+        $step       = $this->createMock(StepInterface::class);
+        $clearCache = true;
+
+        $messages = [];
+
+        $step->expects($this->once())
+            ->method('update')
+            ->with($step)
+            ->willReturn($params);
+
+        $this->configurator->expects($this->once())
+            ->method('mergeParameters');
+
+        $this->configurator->expects($this->once())
+            ->method('write');
+
+        $this->cacheHelper->expects($this->once())
+            ->method('refreshConfig');
+
+        $this->assertSame($messages, $this->installer->saveConfiguration($params, $step, $clearCache));
+    }
+
+    public function testValidateDatabaseParamsWhenNoRequired(): void
+    {
+        $dbParams = [];
+        $messages = [
+            'driver' => null,
+            'host'   => null,
+            'port'   => null,
+            'name'   => null,
+            'user'   => null,
+        ];
+
+        $this->assertEquals($messages, $this->installer->validateDatabaseParams($dbParams));
+    }
+
+    public function testValidateDatabaseParamsWhenPortNotValid(): void
+    {
+        $dbParams = [
+            'driver' => 'pdo_mysql',
+            'host'   => 'localhost',
+            'port'   => '-1',
+            'name'   => 'mautic',
+            'user'   => 'mautic',
+        ];
+        $messages = [
+            'port' => null,
+        ];
+
+        $this->assertEquals($messages, $this->installer->validateDatabaseParams($dbParams));
+    }
+
+    public function testValidateDatabaseParamsWhenAllValid(): void
+    {
+        $dbParams = [
+            'driver' => 'pdo_mysql',
+            'host'   => 'localhost',
+            'port'   => '3306',
+            'name'   => 'mautic',
+            'user'   => 'mautic',
+        ];
+
+        $this->assertSame([], $this->installer->validateDatabaseParams($dbParams));
+    }
+
+    public function testValidateDatabaseParamsWhenDriverNotValid(): void
+    {
+        $dbParams = [
+            'driver' => 'pdo_sqlite',
+            'host'   => 'localhost',
+            'port'   => '3306',
+            'name'   => 'mautic',
+            'user'   => 'mautic',
+        ];
+        $messages = [
+            'driver' => null,
+        ];
+
+        $this->assertEquals($messages, $this->installer->validateDatabaseParams($dbParams));
+    }
+
+    /**
+     * When an exception is raised while creating a database, there must be an array returned.
+     */
+    public function testCreateDatabaseStepWithErrors(): void
+    {
+        $dbParams = [
+            'driver'       => 'pdo_mysql',
+            'host'         => 'localhost',
+            'port'         => '3306',
+            'name'         => 'mautic',
+            'user'         => 'mautic',
+            'table_prefix' => 'mautic_',
+        ];
+
+        $step = $this->createStub(StepInterface::class);
+        $this->assertEquals(['error' => null], $this->installer->createDatabaseStep($step, $dbParams));
+    }
+
+    /**
+     * When an exception is raised while creating the schema, there must be an array returned.
+     */
+    public function testCreateSchemaStepWithErrors(): void
+    {
+        $dbParams = [
+            'driver'       => 'pdo_mysql',
+            'host'         => 'localhost',
+            'port'         => '3306',
+            'name'         => 'mautic',
+            'user'         => 'mautic',
+            'table_prefix' => 'mautic_',
+        ];
+
+        $this->assertEquals(['error' => null], $this->installer->createSchemaStep($dbParams));
+    }
+
+    public function testCreateAdminUserStepWhenPasswordIsMissing(): void
+    {
+        $this->userRepository->expects($this->once())
+            ->method('find')
+            ->willReturn(null);
+
+        $data = [
+            'firstname' => 'Demo',
+            'lastname'  => 'User',
+            'username'  => 'admin',
+            'email'     => 'demo@demo.com',
+        ];
+
+        $this->assertEquals(['password' => null], $this->installer->createAdminUserStep($data));
+    }
+
+    public function testCreateAdminUserStepWhenPasswordIsNotLongEnough(): void
+    {
+        $this->userRepository->expects($this->once())
+            ->method('find')
+            ->willReturn(new User());
+
+        $data = [
+            'firstname' => 'Demo',
+            'lastname'  => 'User',
+            'username'  => 'admin',
+            'password'  => '1',
+            'email'     => 'demo@demo.com',
+        ];
+
+        $mockValidation = $this->createMock(ConstraintViolationInterface::class);
+        $mockValidation->expects($this->once())
+            ->method('getMessage')
+            ->willReturn('password');
+        $matcher = $this->exactly(2);
+
+        $this->validator->expects($matcher)->method('validate')->willReturnCallback(function (...$parameters) use ($matcher, $data, $mockValidation) {
+            if (1 === $matcher->numberOfInvocations()) {
+                $this->assertSame($data['email'], $parameters[0]);
+
+                return new ConstraintViolationList([]);
+            }
+            if (2 === $matcher->numberOfInvocations()) {
+                $this->assertSame($data['password'], $parameters[0]);
+
+                return new ConstraintViolationList([$mockValidation]);
+            }
+        });
+
+        $this->assertSame([0 => 'password'], $this->installer->createAdminUserStep($data));
+    }
+
+    protected function tearDown(): void
+    {
+        if (null !== $this->tempDir && file_exists($this->tempDir)) {
+            if (is_dir($this->tempDir.'/var')) {
+                chmod($this->tempDir.'/var', 0700);
+            }
+
+            (new Filesystem())->remove($this->tempDir);
+        }
+
+        $this->tempDir = null;
+
+        parent::tearDown();
+    }
+
+    public function testPrepareDirectoriesCreatesThemWhenTheyAreAbsent(): void
+    {
+        $projectDir = $this->createTempProjectDir();
+
+        $this->stubPaths($projectDir);
+
+        $this->installer->prepareDirectories();
+
+        $this->assertDirectoryExists($projectDir.'/var/logs');
+        $this->assertDirectoryExists($projectDir.'/var/cache/dev');
+    }
+
+    public function testPrepareDirectoriesLeavesAnExistingDirectoryAlone(): void
+    {
+        $projectDir = $this->createTempProjectDir();
+        mkdir($projectDir.'/var/logs', 0700, true);
+        file_put_contents($projectDir.'/var/logs/mautic_prod.php', 'a log line');
+
+        $this->stubPaths($projectDir);
+
+        $this->installer->prepareDirectories();
+
+        $this->assertSame('a log line', file_get_contents($projectDir.'/var/logs/mautic_prod.php'));
+    }
+
+    public function testPrepareDirectoriesDoesNotThrowWhenTheParentIsNotADirectory(): void
+    {
+        $projectDir = $this->createTempProjectDir();
+
+        // A regular file where var/ should be, so the directories cannot be created.
+        file_put_contents($projectDir.'/var', 'not a directory');
+
+        $this->stubPaths($projectDir);
+
+        $this->installer->prepareDirectories();
+
+        $this->assertDirectoryDoesNotExist($projectDir.'/var/logs');
+    }
+
+    public function testPrepareDirectoriesDoesNotThrowWhenTheParentIsReadOnly(): void
+    {
+        $projectDir = $this->createTempProjectDir();
+        mkdir($projectDir.'/var', 0700, true);
+        chmod($projectDir.'/var', 0500);
+
+        if (is_writable($projectDir.'/var')) {
+            self::markTestSkipped('chmod had no effect, the suite is probably running as root');
+        }
+
+        $this->stubPaths($projectDir);
+
+        $this->installer->prepareDirectories();
+
+        $this->assertDirectoryDoesNotExist($projectDir.'/var/logs');
+    }
+
+    private function createTempProjectDir(): string
+    {
+        $this->tempDir = sys_get_temp_dir().'/mautic_install_service_'.uniqid('', true);
+        mkdir($this->tempDir, 0700, true);
+
+        return $this->tempDir;
+    }
+
+    private function stubPaths(string $projectDir): void
+    {
+        $this->pathsHelper->method('getCachePath')->willReturn($projectDir.'/var/cache/dev');
+        $this->pathsHelper->method('getLogsPath')->willReturn($projectDir.'/var/logs');
+    }
+}

@@ -1,0 +1,82 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\LeadBundle\Tests\Functional\Entity;
+
+use Mautic\CoreBundle\Entity\IpAddress;
+use Mautic\CoreBundle\Test\MauticMysqlTestCase;
+use Mautic\LeadBundle\Entity\Lead;
+use Mautic\LeadBundle\Entity\LeadRepository;
+use PHPUnit\Framework\Attributes\DataProvider;
+use Symfony\Bridge\Doctrine\DataCollector\DoctrineDataCollector;
+use Symfony\Component\HttpFoundation\Request;
+
+final class LeadRepositoryTest extends MauticMysqlTestCase
+{
+    protected function setUp(): void
+    {
+        $this->clientOptions = ['debug' => true];
+
+        parent::setUp();
+    }
+
+    /**
+     * @return \Iterator<int, list<array<string, bool>>>
+     */
+    public static function joinIpAddressesProvider(): \Iterator
+    {
+        yield [[]];
+        yield [['joinIpAddresses' => true]];
+        yield [['joinIpAddresses' => false]];
+    }
+
+    /**
+     * @param array<string, bool> $args
+     */
+    #[DataProvider('joinIpAddressesProvider')]
+    public function testSaveIpAddressToContacts(array $args): void
+    {
+        $contactRepo = self::getContainer()->get(LeadRepository::class);
+
+        $ip      = new IpAddress('127.0.0.1');
+        $contact = new Lead();
+        $contact->addIpAddress($ip);
+        $this->em->persist($contact);
+        $this->em->persist($ip);
+        $this->em->flush();
+
+        $q       = $contactRepo->getEntitiesOrmQueryBuilder('(CASE WHEN u.id=1 THEN 1 ELSE 2 END) AS HIDDEN ORD', $args);
+        $results = $q->getQuery()
+        ->getResult();
+
+        /** @var Lead $r */
+        foreach ($results as $r) {
+            $ipAddresses = $r->getIpAddresses();
+            $ipAddress   = $ipAddresses->first();
+            $this->assertEquals('127.0.0.1', $ipAddress->getIpAddress());
+        }
+
+        $this->client->enableProfiler();
+
+        $this->client->request(Request::METHOD_GET, '/s/contacts');
+
+        $profile = $this->client->getProfile();
+        /** @var DoctrineDataCollector $dbCollector */
+        $dbCollector = $profile->getCollector('db');
+        $queries     = $dbCollector->getQueries();
+
+        $finalQueries = array_filter(
+            $queries['default'],
+            fn (array $query): bool => str_contains($query['sql'], 'SELECT (CASE WHEN t0_.id = 1 THEN 1 ELSE 2 END)')
+        );
+
+        foreach ($finalQueries as $query) {
+            if ($args['joinIpAddresses'] ?? true) {
+                $this->assertStringContainsString('LEFT JOIN test_ip_addresses', (string) $query['sql']);
+            } else {
+                $this->assertStringNotContainsString('LEFT JOIN test_ip_addresses', (string) $query['sql']);
+            }
+        }
+    }
+}

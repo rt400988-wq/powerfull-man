@@ -1,0 +1,299 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\CoreBundle\Tests\EventListener;
+
+use Mautic\CoreBundle\Entity\CommonEntity;
+use Mautic\CoreBundle\Entity\FormEntity;
+use Mautic\CoreBundle\Event\IconEvent;
+use Mautic\CoreBundle\EventListener\DashboardSubscriber;
+use Mautic\CoreBundle\Factory\ModelFactory;
+use Mautic\CoreBundle\Model\AbstractCommonModel;
+use Mautic\CoreBundle\Model\AuditLogModel;
+use Mautic\CoreBundle\Model\FormModel;
+use Mautic\CoreBundle\Security\Permissions\CorePermissions;
+use Mautic\DashboardBundle\Entity\Widget;
+use Mautic\DashboardBundle\Event\WidgetDetailEvent;
+use Mautic\UserBundle\Entity\User;
+use PHPUnit\Framework\Exception;
+use PHPUnit\Framework\MockObject\MockObject;
+use PHPUnit\Framework\TestCase;
+use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
+use Symfony\Component\Routing\Route;
+use Symfony\Component\Routing\RouteCollection;
+use Symfony\Component\Routing\Router;
+use Symfony\Contracts\EventDispatcher\EventDispatcherInterface;
+use Symfony\Contracts\Translation\TranslatorInterface;
+
+final class DashboardSubscriberTest extends TestCase
+{
+    /**
+     * @var MockObject&AuditLogModel
+     */
+    private MockObject $auditLogModel;
+
+    /**
+     * @var MockObject&TranslatorInterface
+     */
+    private MockObject $translator;
+
+    /**
+     * @var MockObject&Router
+     */
+    private MockObject $router;
+
+    /**
+     * @var MockObject&EventDispatcherInterface
+     */
+    private MockObject $dispatcher;
+
+    /**
+     * @var MockObject&ModelFactory
+     */
+    private MockObject $modelFactory;
+
+    /**
+     * @var MockObject&WidgetDetailEvent
+     */
+    private MockObject $event;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->auditLogModel = $this->createMock(AuditLogModel::class);
+        $this->translator    = $this->createMock(TranslatorInterface::class);
+        $this->router        = $this->createMock(Router::class);
+        $this->dispatcher    = $this->createMock(EventDispatcherInterface::class);
+        $this->modelFactory  = $this->createMock(ModelFactory::class);
+        $this->event         = $this->createMock(WidgetDetailEvent::class);
+    }
+
+    public function testSubscriberChecksForEventType(): void
+    {
+        $this->event->expects($this->once())
+            ->method('getType')
+            ->willReturn('random');
+        $this->event->expects($this->never())
+            ->method('isCached');
+        $this->event->expects($this->never())
+            ->method('setTemplate');
+
+        $this->auditLogModel->expects($this->never())
+            ->method('getLogForObject');
+
+        $subscriber = new DashboardSubscriber(
+            $this->auditLogModel,
+            $this->translator,
+            $this->router,
+            $this->createStub(CorePermissions::class),
+            $this->dispatcher,
+            $this->modelFactory
+        );
+        $subscriber->onWidgetDetailGenerate($this->event);
+    }
+
+    public function testSubscriberChecksForCache(): void
+    {
+        $this->event->expects($this->once())
+            ->method('getType')
+            ->willReturn(DashboardSubscriber::TYPE_RECENT_ACTIVITY);
+        $this->event->expects($this->once())
+            ->method('isCached')
+            ->willReturn(true);
+        $this->event->expects($this->once())
+            ->method('setTemplate');
+        $this->event->expects($this->once())
+            ->method('stopPropagation');
+
+        $this->auditLogModel->expects($this->never())
+            ->method('getLogForObject');
+
+        $subscriber = new DashboardSubscriber(
+            $this->auditLogModel,
+            $this->translator,
+            $this->router,
+            $this->createStub(CorePermissions::class),
+            $this->dispatcher,
+            $this->modelFactory
+        );
+        $subscriber->onWidgetDetailGenerate($this->event);
+    }
+
+    public function testSubscriberGatherLogs(): void
+    {
+        $widget = $this->createMock(Widget::class);
+        $widget->expects($this->once())
+            ->method('getHeight')
+            ->willReturn(1500);
+        $this->event->expects($this->once())
+            ->method('getType')
+            ->willReturn(DashboardSubscriber::TYPE_RECENT_ACTIVITY);
+        $this->event->expects($this->once())
+            ->method('isCached')
+            ->willReturn(false);
+        $this->event->expects($this->once())
+            ->method('getWidget')
+            ->willReturn($widget);
+        $this->event->expects($this->once())
+            ->method('setTemplate');
+        $this->event->expects($this->once())
+            ->method('stopPropagation');
+
+        $this->translator->expects($this->once())
+            ->method('trans')
+            ->with('mautic.lead.lead.anonymous')
+            ->willReturn('whatever');
+
+        $logs   = $expectedLogs   = [];
+        $logs[] = $expectedLogs[] = ['something', 'else']; // corrupt database data
+        $logs[] = $expectedLogs[] = ['bundle' => 'null', 'object' => 'object', 'objectId' => 123];
+        $logs[] = $expectedLogs[] = ['bundle' => 'model', 'object' => 'not_form_model', 'objectId' => 234];
+        $logs[] = $expectedLogs[] = ['bundle' => 'model', 'object' => 'has_no_getter', 'objectId' => 345];
+        $logs[] = $expectedLogs[] = ['bundle' => 'item', 'object' => 'not_lead', 'objectId' => 456];
+        $logs[] = $expectedLogs[] = ['bundle' => 'lead', 'object' => 'not_anonymous', 'objectId' => 567];
+        $logs[] = $expectedLogs[] = ['bundle' => 'lead', 'object' => 'is_anonymous', 'objectId' => 678];
+        $logs[] = ['bundle' => 'object', 'object' => 'exception', 'objectId' => 789];
+
+        $this->auditLogModel->expects($this->once())
+            ->method('getLogForObject')
+            ->with(null, null, null, 19)
+            ->willReturn($logs);
+
+        $nullObjectModel = $this->createMock(AbstractCommonModel::class);
+        $nullObjectModel->expects($this->once())
+            ->method('getEntity')
+            ->with(123)
+            ->willReturn(null);
+        $nonFormModel = $this->createMock(AbstractCommonModel::class);
+        $nonFormModel->expects($this->once())
+            ->method('getEntity')
+            ->with(234)
+            ->willReturn($this->createStub(CommonEntity::class));
+        $nonEntityHasNoGetter = $this->createMock(FormModel::class);
+        $nonEntityHasNoGetter->expects($this->once())
+            ->method('getEntity')
+            ->with(345)
+            ->willReturn($this->createStub(FormEntity::class));
+        $notLead       = $this->createMock(FormModel::class);
+        $anonymousUser = $this->createMock(User::class);
+        $anonymousUser->method('getName')->willReturn('mautic.lead.lead.anonymous');
+        $notLead->expects($this->once())
+            ->method('getEntity')
+            ->with(456)
+            ->willReturn($anonymousUser);
+        $notLead->method('getNameGetter')
+            ->willReturn('getName');
+        $notAnonymous = $this->createMock(FormModel::class);
+        $adminUser    = $this->createMock(User::class);
+        $adminUser->method('getName')->willReturn('admin');
+        $notAnonymous->expects($this->once())
+            ->method('getEntity')
+            ->with(567)
+            ->willReturn($adminUser);
+        $notAnonymous->method('getNameGetter')
+            ->willReturn('getName');
+        $isAnonymous = $this->createMock(FormModel::class);
+        $isAnonymous->expects($this->once())
+            ->method('getEntity')
+            ->with(678)
+            ->willReturn($anonymousUser);
+        $isAnonymous->method('getNameGetter')
+            ->willReturn('getName');
+        $exception = $this->createMock(FormModel::class);
+        $exception->expects($this->once())
+            ->method('getEntity')
+            ->with(789)
+            ->willThrowException($this->createStub(\Exception::class));
+
+        $this->modelFactory->expects($this->exactly(7))
+            ->method('getModel')
+            ->willReturnMap([
+                ['null.object', $nullObjectModel],
+                ['model.not_form_model', $nonFormModel],
+                ['model.has_no_getter', $nonEntityHasNoGetter],
+                ['item.not_lead', $notLead],
+                ['lead.not_anonymous', $notAnonymous],
+                ['lead.is_anonymous', $isAnonymous],
+                ['object.exception', $exception],
+            ]);
+
+        $route           = $this->createStub(Route::class);
+        $routeCollection = $this->createMock(RouteCollection::class);
+        $matcher         = $this->exactly(5);
+        $routeCollection->expects($matcher) // no null object and  exception object
+            ->method('get')->willReturnCallback(function (...$parameters) use ($matcher, $route): ?\PHPUnit\Framework\MockObject\Stub {
+                if (1 === $matcher->numberOfInvocations()) {
+                    $this->assertSame('mautic_model_action', $parameters[0]);
+
+                    return null;
+                }
+                if (2 === $matcher->numberOfInvocations()) {
+                    $this->assertSame('mautic_model_action', $parameters[0]);
+
+                    return $route;
+                }
+                if (3 === $matcher->numberOfInvocations()) {
+                    $this->assertSame('mautic_item_action', $parameters[0]);
+
+                    return $route;
+                }
+                if (4 === $matcher->numberOfInvocations()) {
+                    $this->assertSame('mautic_lead_action', $parameters[0]);
+
+                    return $route;
+                }
+                if (5 === $matcher->numberOfInvocations()) {
+                    $this->assertSame('mautic_lead_action', $parameters[0]);
+
+                    return null;
+                }
+
+                throw new Exception(sprintf('Method not be called for %dth time', $matcher->numberOfInvocations()));
+            });
+
+        $this->router->expects($this->exactly(5))
+            ->method('getRouteCollection')
+            ->willReturn($routeCollection);
+        $this->router->expects($this->exactly(3))
+            ->method('generate')
+            ->willReturnMap([
+                ['mautic_model_action', ['objectAction' => 'view', 'objectId' => 345], UrlGeneratorInterface::ABSOLUTE_PATH, '/not-getter'],
+                ['mautic_item_action', ['objectAction' => 'view', 'objectId' => 456], UrlGeneratorInterface::ABSOLUTE_PATH, '/not-lead'],
+                ['mautic_lead_action', ['objectAction' => 'view', 'objectId' => 567], UrlGeneratorInterface::ABSOLUTE_PATH, '/not-anonymous'],
+            ]);
+
+        $iconEvent = new IconEvent($this->createStub(CorePermissions::class));
+        $this->dispatcher->expects($this->once())
+            ->method('dispatch')
+            ->with($iconEvent);
+
+        $expectedLogs[1]['objectName'] = 'object-123'; // null object
+        $expectedLogs[1]['route']      = false;
+        $expectedLogs[2]['objectName'] = ''; // not form model
+        $expectedLogs[2]['route']      = false;
+        $expectedLogs[3]['objectName'] = ''; // has no getter
+        $expectedLogs[3]['route']      = '/not-getter';
+        $expectedLogs[4]['objectName'] = 'mautic.lead.lead.anonymous';  // not lead
+        $expectedLogs[4]['route']      = '/not-lead';
+        $expectedLogs[5]['objectName'] = 'admin';  // not anonymous
+        $expectedLogs[5]['route']      = '/not-anonymous';
+        $expectedLogs[6]['objectName'] = 'whatever';  // is anonymous (translated)
+        $expectedLogs[6]['route']      = false;
+
+        $this->event->expects($this->once())
+            ->method('setTemplateData')
+            ->with(['logs' => $expectedLogs, 'icons' => []]);
+
+        $subscriber = new DashboardSubscriber(
+            $this->auditLogModel,
+            $this->translator,
+            $this->router,
+            $this->createStub(CorePermissions::class),
+            $this->dispatcher,
+            $this->modelFactory
+        );
+        $subscriber->onWidgetDetailGenerate($this->event);
+    }
+}

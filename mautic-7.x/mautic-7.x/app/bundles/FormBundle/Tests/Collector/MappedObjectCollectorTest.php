@@ -1,0 +1,72 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\FormBundle\Tests\Collector;
+
+use Mautic\FormBundle\Collection\FieldCollection;
+use Mautic\FormBundle\Collector\FieldCollectorInterface;
+use Mautic\FormBundle\Collector\MappedObjectCollector;
+use PHPUnit\Framework\Assert;
+
+final class MappedObjectCollectorTest extends \PHPUnit\Framework\TestCase
+{
+    public function testBuildCollectionForNoObject(): void
+    {
+        $fieldCollector                            = new class() implements FieldCollectorInterface {
+            public int $getFieldsMethodCallCounter = 0;
+
+            public function getFields(string $object): FieldCollection
+            {
+                ++$this->getFieldsMethodCallCounter;
+
+                return new FieldCollection();
+            }
+        };
+
+        $mappedObjectCollector = new MappedObjectCollector($fieldCollector);
+        $objectCollection      = $mappedObjectCollector->buildCollection('');
+        $this->assertCount(0, $objectCollection);
+        $this->assertSame(0, $fieldCollector->getFieldsMethodCallCounter);
+    }
+
+    public function testBuildCollectionForOneObject(): void
+    {
+        $fieldCollector                            = new class() implements FieldCollectorInterface {
+            public int $getFieldsMethodCallCounter = 0;
+
+            public function getFields(string $object): FieldCollection
+            {
+                Assert::assertSame('contact', $object);
+                ++$this->getFieldsMethodCallCounter;
+
+                return new FieldCollection();
+            }
+        };
+
+        $mappedObjectCollector = new MappedObjectCollector($fieldCollector);
+        $objectCollection      = $mappedObjectCollector->buildCollection('contact');
+        $this->assertCount(1, $objectCollection);
+        $this->assertSame(1, $fieldCollector->getFieldsMethodCallCounter);
+    }
+
+    public function testBuildCollectionForMultipleObjects(): void
+    {
+        $fieldCollector                            = new class() implements FieldCollectorInterface {
+            public int $getFieldsMethodCallCounter = 0;
+
+            public function getFields(string $object): FieldCollection
+            {
+                Assert::assertContains($object, ['company', 'contact']);
+                ++$this->getFieldsMethodCallCounter;
+
+                return new FieldCollection();
+            }
+        };
+
+        $mappedObjectCollector = new MappedObjectCollector($fieldCollector);
+        $objectCollection      = $mappedObjectCollector->buildCollection('contact', 'company');
+        $this->assertCount(2, $objectCollection);
+        $this->assertSame(2, $fieldCollector->getFieldsMethodCallCounter);
+    }
+}

@@ -1,0 +1,210 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\LeadBundle\Tests\Functional\Entity;
+
+use Mautic\CoreBundle\Test\MauticMysqlTestCase;
+use Mautic\CoreBundle\Test\ReflectionHelper;
+use Mautic\EmailBundle\Helper\MailHelper;
+use Mautic\EmailBundle\Tests\Helper\Transport\SmtpTransport;
+use Mautic\LeadBundle\Entity\Company;
+use Mautic\LeadBundle\Entity\Lead;
+use Mautic\LeadBundle\Entity\LeadList;
+use Mautic\LeadBundle\Entity\ListLead;
+use Mautic\LeadBundle\Model\CompanyModel;
+use Mautic\UserBundle\Entity\User;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\Mailer\Mailer;
+
+final class CompanyRepositoryTest extends MauticMysqlTestCase
+{
+    private SmtpTransport $transport;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->setUpMailer();
+    }
+
+    protected function beforeTearDown(): void
+    {
+        // Clear owners cache (to leave a clean environment for future tests):
+        /** @var MailHelper $mailHelper */
+        $mailHelper = self::getContainer()->get(MailHelper::class);
+        ReflectionHelper::setValue($mailHelper, 'leadOwners', []);
+    }
+
+    public function testEmailSendWithCompanyTokens(): void
+    {
+        $suffix   = random_int(10, 100);
+        $companyA = $this->createCompany('ABC Co.'.$suffix, 'First Street'.$suffix);
+        $contactA = $this->createContact('John'.$suffix, 'JohnDoe'.$suffix.'@email.com', $companyA);
+        $companyB = $this->createCompany('XYZ Co.'.$suffix, 'Second Street'.$suffix);
+        $this->editContact($contactA, $companyB, $companyA);
+        $segment = $this->createSegment('Segment A'.$suffix, 'segment-a-'.$suffix);
+        $this->addContactsToSegment([$contactA], $segment);
+        $emailId = $this->createEmail('EmailName'.$suffix, 'Subject'.$suffix, 'list', $segment->getId());
+        $this->sendEmailViaApi($emailId);
+        $testEmail = function () use ($suffix): void {
+            $message = $this->transport->sentMessage;
+            $this->assertSame($message->getSubject(), 'Subject'.$suffix);
+            $this->assertSame($message->getTo()[0]->getAddress(), 'JohnDoe'.$suffix.'@email.com');
+            $this->assertSame($message->getTo()[0]->getName(), 'John'.$suffix);
+            $messageBody = $message->getBody()->toString();
+            $this->assertStringContainsString('JohnDoe'.$suffix.'@email.com', $messageBody);
+            $this->assertStringContainsString('XYZ Co.'.$suffix, $messageBody);
+            $this->assertStringContainsString('Second Street'.$suffix, $messageBody);
+        };
+        $testEmail();
+    }
+
+    public function testSearchesForUnownedCompanies(): void
+    {
+        $unowned = $this->createCompany('Unowned company');
+        $owned   = $this->createCompany('Owned company');
+        $owner   = $this->em->getRepository(User::class)->findOneBy(['username' => 'admin']);
+        $this->assertInstanceOf(User::class, $owner);
+        $owned->setOwner($owner);
+        $this->em->persist($owned);
+        $this->em->flush();
+        $this->em->refresh($owned);
+        $this->assertSame($owner, $owned->getOwner());
+
+        foreach (['', '&tmpl=list'] as $template) {
+            $this->client->request(Request::METHOD_GET, '/s/companies?search=is:unowned'.$template);
+
+            self::assertResponseIsSuccessful();
+            $content = (string) $this->client->getResponse()->getContent();
+            $this->assertStringContainsString($unowned->getName(), $content);
+            $this->assertStringNotContainsString($owned->getName(), $content);
+        }
+
+        $this->client->request(Request::METHOD_GET, '/s/companies?search=');
+        self::assertResponseIsSuccessful();
+        $content = (string) $this->client->getResponse()->getContent();
+        $this->assertStringContainsString($unowned->getName(), $content);
+        $this->assertStringContainsString($owned->getName(), $content);
+    }
+
+    private function createCompany(string $name, string $address1 = ''): Company
+    {
+        /** @var CompanyModel $model */
+        $model   = self::getContainer()->get(CompanyModel::class);
+        $company = new Company();
+        $company->setIsPublished(true)->setName($name)->setAddress1($address1);
+        $model->saveEntity($company);
+
+        return $company;
+    }
+
+    private function createContact(string $firstName, string $email, Company $company): Lead
+    {
+        $crawler     = $this->client->request(Request::METHOD_GET, '/s/contacts/new');
+        $formCrawler = $crawler->filter('form[name=lead]');
+        $this->assertCount(1, $formCrawler);
+
+        $form = $formCrawler->form();
+        $form->setValues(
+            [
+                'lead[firstname]' => $firstName,
+                'lead[email]'     => $email,
+                'lead[companies]' => [$company->getId()],
+            ]
+        );
+        $this->client->submit($form);
+
+        return $this->em->getRepository(Lead::class)->findOneBy(
+            [
+                'firstname' => $firstName,
+                'email'     => $email,
+            ]
+        );
+    }
+
+    private function editContact(Lead $contact, Company $primaryCompany, Company $secondaryCompany): void
+    {
+        $crawler     = $this->client->request(Request::METHOD_GET, '/s/contacts/edit/'.$contact->getId());
+        $formCrawler = $crawler->filter('form[name=lead]');
+        $this->assertCount(1, $formCrawler);
+
+        $form = $formCrawler->form();
+        $form->setValues(
+            [
+                'lead[companies]' => [$primaryCompany->getId(), $secondaryCompany->getId()],
+            ]
+        );
+        $this->client->submit($form);
+    }
+
+    private function createSegment(string $name, string $alias): LeadList
+    {
+        $segment = new LeadList();
+        $segment->setName($name);
+        $segment->setPublicName($name);
+        $segment->setAlias($alias);
+        $this->em->persist($segment);
+        $this->em->flush();
+
+        return $segment;
+    }
+
+    /**
+     * @param array<Lead> $contacts
+     */
+    private function addContactsToSegment(array $contacts, LeadList $segment): void
+    {
+        foreach ($contacts as $contact) {
+            $reference = new ListLead();
+            $reference->setLead($contact);
+            $reference->setList($segment);
+            $reference->setDateAdded(new \DateTime());
+            $this->em->persist($reference);
+        }
+
+        $this->em->flush();
+    }
+
+    private function createEmail(string $name, string $subject, string $emailType, ?int $segmentId = null): int
+    {
+        $payload = [
+            'name'       => $name,
+            'subject'    => $subject,
+            'emailType'  => $emailType,
+            'customHtml' => '{contactfield=email} {contactfield=companyname} {contactfield=companyaddress1}',
+        ];
+
+        if ('list' === $emailType) {
+            $payload['lists'] = [$segmentId];
+        }
+
+        $this->client->request('POST', '/api/emails/new', $payload);
+        $clientResponse = $this->client->getResponse();
+        $response       = json_decode($clientResponse->getContent(), true);
+
+        return $response['email']['id'];
+    }
+
+    private function setUpMailer(): void
+    {
+        /** @var MailHelper $mailHelper */
+        $mailHelper = self::getContainer()->get(MailHelper::class);
+        $transport  = new SmtpTransport();
+        $mailer     = new Mailer($transport);
+        ReflectionHelper::setValue($mailHelper, 'mailer', $mailer);
+        ReflectionHelper::setValue($mailHelper, 'transport', $transport);
+        $this->transport = $transport;
+    }
+
+    private function sendEmailViaApi(int $emailId): void
+    {
+        $this->client->request('POST', "/api/emails/{$emailId}/send");
+        $clientResponse = $this->client->getResponse();
+        self::assertResponseIsSuccessful();
+        $this->assertSame(json_decode($clientResponse->getContent(), true, 512, JSON_THROW_ON_ERROR), [
+            'success'          => 1,
+            'sentCount'        => 1,
+            'failedRecipients' => 0,
+        ], $clientResponse->getContent());
+    }
+}

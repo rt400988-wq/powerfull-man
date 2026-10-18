@@ -1,0 +1,75 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\LeadBundle\Tests\Helper;
+
+use Mautic\LeadBundle\Entity\CompanyLeadRepository;
+use Mautic\LeadBundle\Entity\Lead;
+use Mautic\LeadBundle\Helper\PrimaryCompanyHelper;
+
+final class PrimaryCompanyHelperTest extends \PHPUnit\Framework\TestCase
+{
+    /**
+     * @var \PHPUnit\Framework\MockObject\MockObject&CompanyLeadRepository
+     */
+    private \PHPUnit\Framework\MockObject\MockObject $leadRepository;
+
+    protected function setUp(): void
+    {
+        $this->leadRepository = $this->createMock(CompanyLeadRepository::class);
+
+        $this->leadRepository->expects($this->once())
+            ->method('getCompaniesByLeadId')
+            ->willReturn(
+                [
+                    [
+                        'score'           => 0,
+                        'date_added'      => '2018-06-02 00:00:00',
+                        'date_associated' => '2018-06-02 00:00:00',
+                        'is_primary'      => 1,
+                        'companywebsite'  => 'https://foo.com',
+                    ],
+                    [
+                        'score'           => 0,
+                        'date_added'      => '2018-06-02 00:00:00',
+                        'date_associated' => '2018-06-02 00:00:00',
+                        'is_primary'      => 0,
+                        'companywebsite'  => 'https://bar.com',
+                    ],
+                ]
+            );
+    }
+
+    public function testProfileFieldsReturnedWithPrimaryCompany(): void
+    {
+        $lead = $this->createMock(Lead::class);
+        $lead->expects($this->once())
+            ->method('getProfileFields')
+            ->willReturn(
+                [
+                    'email' => 'test@test.com',
+                ]
+            );
+
+        $profileFields = $this->getPrimaryCompanyHelper()->getProfileFieldsWithPrimaryCompany($lead);
+
+        $this->assertEquals(['email' => 'test@test.com', 'companywebsite' => 'https://foo.com'], $profileFields);
+    }
+
+    public function testPrimaryCompanyMergedIntoProfileFields(): void
+    {
+        $leadFields = [
+            'email' => 'test@test.com',
+        ];
+
+        $profileFields = $this->getPrimaryCompanyHelper()->mergePrimaryCompanyWithProfileFields(1, $leadFields);
+
+        $this->assertEquals(['email' => 'test@test.com', 'companywebsite' => 'https://foo.com'], $profileFields);
+    }
+
+    private function getPrimaryCompanyHelper(): PrimaryCompanyHelper
+    {
+        return new PrimaryCompanyHelper($this->leadRepository);
+    }
+}

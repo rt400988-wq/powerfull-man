@@ -1,0 +1,412 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\AssetBundle\Tests\Model;
+
+use Doctrine\ORM\EntityManager;
+use Mautic\AssetBundle\AssetEvents;
+use Mautic\AssetBundle\Entity\Asset;
+use Mautic\AssetBundle\Entity\AssetRepository;
+use Mautic\AssetBundle\Entity\Download;
+use Mautic\AssetBundle\Entity\DownloadRepository;
+use Mautic\AssetBundle\Model\AssetModel;
+use Mautic\CacheBundle\Cache\CacheProvider;
+use Mautic\CategoryBundle\Entity\CategoryRepository;
+use Mautic\CategoryBundle\Model\CategoryModel;
+use Mautic\CoreBundle\Entity\IpAddress;
+use Mautic\CoreBundle\Helper\CoreParametersHelper;
+use Mautic\CoreBundle\Helper\IpLookupHelper;
+use Mautic\CoreBundle\Helper\UserHelper;
+use Mautic\CoreBundle\Security\Permissions\CorePermissions;
+use Mautic\CoreBundle\Translation\Translator;
+use Mautic\EmailBundle\Entity\EmailRepository;
+use Mautic\LeadBundle\Entity\Lead;
+use Mautic\LeadBundle\Entity\LeadDevice;
+use Mautic\LeadBundle\Model\LeadModel;
+use Mautic\LeadBundle\Tracker\ContactTracker;
+use Mautic\LeadBundle\Tracker\Factory\DeviceDetectorFactory\DeviceDetectorFactory;
+use Mautic\LeadBundle\Tracker\Service\DeviceCreatorService\DeviceCreatorService;
+use Mautic\LeadBundle\Tracker\Service\DeviceTrackingService\DeviceTrackingServiceInterface;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Exception;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\ContainerInterface;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\RequestStack;
+use Symfony\Component\HttpFoundation\ServerBag;
+use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
+
+final class AssetModelTest extends \PHPUnit\Framework\TestCase
+{
+    private AssetModel $assetModel;
+
+    private CoreParametersHelper&MockObject $coreParametersHelper;
+
+    private LeadModel&\PHPUnit\Framework\MockObject\Stub $leadModel;
+
+    private CategoryModel&\PHPUnit\Framework\MockObject\Stub $categoryModel;
+
+    private RequestStack&MockObject $requestStack;
+
+    private IpLookupHelper&MockObject $ipLookupHelper;
+
+    private DeviceDetectorFactory $deviceDetectorFactory;
+
+    private DeviceCreatorService $deviceCreatorService;
+
+    private DeviceTrackingServiceInterface&MockObject $deviceTrackingService;
+
+    private ContactTracker&MockObject $contactTracker;
+
+    private EntityManager&MockObject $entityManager;
+
+    private CorePermissions&MockObject $corePermissions;
+
+    private EventDispatcherInterface&MockObject $eventDispatcher;
+
+    private \PHPUnit\Framework\MockObject\Stub&UrlGeneratorInterface $urlGenerator;
+
+    private Translator&\PHPUnit\Framework\MockObject\Stub $translator;
+
+    private UserHelper&\PHPUnit\Framework\MockObject\Stub $userHelper;
+
+    private LoggerInterface&\PHPUnit\Framework\MockObject\Stub $logger;
+
+    private AssetRepository&MockObject $assetRepository;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->coreParametersHelper = $this->createMock(CoreParametersHelper::class);
+        $this->coreParametersHelper->method('get')
+            ->with('max_size')
+            ->willReturn('2MB');
+        $cacheProvider               = new CacheProvider($this->coreParametersHelper, $this->createStub(ContainerInterface::class));
+        $this->leadModel             = $this->createStub(LeadModel::class);
+        $this->categoryModel         = $this->createStub(CategoryModel::class);
+        $this->requestStack          = $this->createMock(RequestStack::class);
+        $this->ipLookupHelper        = $this->createMock(IpLookupHelper::class);
+        $this->deviceDetectorFactory = new DeviceDetectorFactory($cacheProvider);
+        $this->deviceCreatorService  = new DeviceCreatorService();
+        $this->deviceTrackingService = $this->createMock(DeviceTrackingServiceInterface::class);
+        $this->contactTracker        = $this->createMock(ContactTracker::class);
+        $this->entityManager         = $this->createMock(EntityManager::class);
+        $this->corePermissions       = $this->createMock(CorePermissions::class);
+        $this->eventDispatcher       = $this->createMock(EventDispatcherInterface::class);
+        $this->urlGenerator          = $this->createStub(UrlGeneratorInterface::class);
+        $this->translator            = $this->createStub(Translator::class);
+        $this->userHelper            = $this->createStub(UserHelper::class);
+        $this->logger                = $this->createStub(LoggerInterface::class);
+        $this->assetRepository       = $this->createMock(AssetRepository::class);
+
+        $this->assetModel = new AssetModel(
+            $this->leadModel,
+            $this->categoryModel,
+            $this->requestStack,
+            $this->ipLookupHelper,
+            $this->deviceCreatorService,
+            $this->deviceDetectorFactory,
+            $this->deviceTrackingService,
+            $this->contactTracker,
+            $this->entityManager,
+            $this->corePermissions,
+            $this->eventDispatcher,
+            $this->urlGenerator,
+            $this->translator,
+            $this->userHelper,
+            $this->logger,
+            $this->coreParametersHelper,
+            $this->createStub(EmailRepository::class),
+            $this->assetRepository,
+            $this->createStub(DownloadRepository::class),
+            $this->createStub(CategoryRepository::class),
+        );
+    }
+
+    /**
+     * Test that TrackDownload works only with a request.
+     */
+    public function testTrackDownloadRequest(): void
+    {
+        $asset = new Asset();
+
+        $this->corePermissions->expects($this->once())
+            ->method('isAnonymous')
+            ->willReturn(true);
+
+        $this->requestStack->expects($this->once())
+            ->method('getCurrentRequest')
+            ->willReturn(null);
+
+        $this->entityManager->expects($this->never())
+            ->method('persist');
+
+        $this->entityManager->expects($this->never())
+            ->method('flush');
+
+        $this->entityManager->expects($this->never())
+            ->method('detach');
+
+        $this->assetModel->trackDownload($asset);
+    }
+
+    /**
+     * Test that TrackDownload works successfully.
+     */
+    public function testTrackDownload(): void
+    {
+        $asset = new Asset();
+        $lead  = new Lead();
+
+        $this->corePermissions->expects($this->once())
+            ->method('isAnonymous')
+            ->willReturn(true);
+
+        $this->ipLookupHelper->method('isRequestTrackable')->willReturn(true);
+
+        $request = $this->createMock(Request::class);
+
+        $serverBag = $this->createMock(ServerBag::class);
+
+        $serverBag->expects($this->once())
+            ->method('get')
+            ->with('HTTP_REFERER')
+            ->willReturn('http://localhost');
+
+        $request->server = $serverBag;
+        $matcher         = $this->exactly(6);
+
+        $request->expects($matcher)
+            ->method('get')->willReturnCallback(function (...$parameters) use ($matcher): string|false {
+                if (1 === $matcher->numberOfInvocations()) {
+                    $this->assertEquals('utm_campaign', $parameters[0]);
+
+                    return 'test_utm_campaign';
+                }
+                if (2 === $matcher->numberOfInvocations()) {
+                    $this->assertEquals('utm_content', $parameters[0]);
+
+                    return 'test_utm_content';
+                }
+                if (3 === $matcher->numberOfInvocations()) {
+                    $this->assertEquals('utm_medium', $parameters[0]);
+
+                    return 'test_utm_medium';
+                }
+                if (4 === $matcher->numberOfInvocations()) {
+                    $this->assertEquals('utm_source', $parameters[0]);
+
+                    return 'test_utm_source';
+                }
+                if (5 === $matcher->numberOfInvocations()) {
+                    $this->assertEquals('utm_term', $parameters[0]);
+
+                    return 'test_utm_term';
+                }
+                if (6 === $matcher->numberOfInvocations()) {
+                    $this->assertEquals('ct', $parameters[0]);
+
+                    return false;
+                }
+
+                throw new Exception(sprintf('Method not be called for %dth time', $matcher->numberOfInvocations()));
+            });
+
+        $this->requestStack->expects($this->once())
+            ->method('getCurrentRequest')
+            ->willReturn($request);
+
+        $this->deviceTrackingService->expects($this->once())
+            ->method('isTracked')
+            ->willReturn(false);
+
+        $this->contactTracker->expects($this->once())
+            ->method('getContact')
+            ->willReturn($lead);
+
+        $trackedDevice = $this->createMock(LeadDevice::class);
+        $trackedDevice->method('getTrackingId')->willReturn('test-tracking-id');
+        $this->deviceTrackingService->expects($this->once())
+            ->method('getTrackedDevice')
+            ->willReturn($trackedDevice);
+
+        $this->assetRepository->expects($this->once())
+            ->method('upDownloadCount')
+            ->with(
+                $asset->getId(),
+                1,
+                true,
+            );
+
+        $ipAddress = new IpAddress('127.0.0.1');
+
+        $this->ipLookupHelper->expects($this->exactly(2))
+            ->method('getIpAddress')
+            ->willReturn($ipAddress);
+
+        $this->eventDispatcher->expects($this->once())
+            ->method('hasListeners')
+            ->with(AssetEvents::ASSET_ON_LOAD)
+            ->willReturn(false);
+
+        /** @var ?Download $download */
+        $download = null;
+
+        $this->entityManager->expects($this->once())
+            ->method('persist')
+            ->with($this->callback(function ($downloadPersist) use (&$download): bool {
+                $download = $downloadPersist;
+                $this->assertInstanceOf(Download::class, $download);
+
+                return true;
+            }));
+
+        $this->entityManager->expects($this->once())
+            ->method('flush');
+
+        $this->entityManager->expects($this->once())
+            ->method('detach')
+            ->with($this->callback(function ($downloadDetach) use (&$download): true {
+                $this->assertSame($downloadDetach, $download);
+
+                return true;
+            }));
+
+        $this->assetModel->trackDownload($asset);
+
+        $this->assertSame('test_utm_campaign', $download->getUtmCampaign());
+        $this->assertSame('test_utm_content', $download->getUtmContent());
+        $this->assertSame('test_utm_medium', $download->getUtmMedium());
+        $this->assertSame('test_utm_source', $download->getUtmSource());
+        $this->assertSame('test_utm_term', $download->getUtmTerm());
+        $this->assertEquals('200', $download->getCode());
+        $this->assertEquals($ipAddress, $download->getIpAddress());
+        $this->assertEquals($lead, $download->getLead());
+        $this->assertEquals($asset, $download->getAsset());
+        $this->assertEquals('http://localhost', $download->getReferer());
+    }
+
+    #[DataProvider('getEntityBySlugsProvider')]
+    public function testGetEntityBySlugs(
+        string $slug,
+        bool $expectsLookup,
+        bool $shouldResolve,
+        ?string $alias,
+    ): void {
+        $asset = null;
+
+        if ($expectsLookup) {
+            $asset = new Asset();
+            $asset->setAlias($alias);
+        }
+
+        $model = $this->getMockBuilder(AssetModel::class)
+            ->setConstructorArgs([
+                $this->leadModel,
+                $this->categoryModel,
+                $this->requestStack,
+                $this->ipLookupHelper,
+                $this->deviceCreatorService,
+                $this->deviceDetectorFactory,
+                $this->deviceTrackingService,
+                $this->contactTracker,
+                $this->entityManager,
+                $this->corePermissions,
+                $this->eventDispatcher,
+                $this->urlGenerator,
+                $this->translator,
+                $this->userHelper,
+                $this->logger,
+                $this->coreParametersHelper,
+                $this->createStub(EmailRepository::class),
+                $this->createStub(AssetRepository::class),
+                $this->createStub(DownloadRepository::class),
+                $this->createStub(CategoryRepository::class),
+            ])
+            ->onlyMethods(['getEntity'])
+            ->getMock();
+
+        if ($expectsLookup) {
+            $model->expects($this->once())
+                ->method('getEntity')
+                ->willReturn($asset);
+        } else {
+            $model->expects($this->never())
+                ->method('getEntity');
+        }
+
+        $result = $model->getEntityBySlugs($slug);
+
+        if ($shouldResolve) {
+            $this->assertSame($asset, $result);
+        } else {
+            $this->assertFalse($result);
+        }
+    }
+
+    /**
+     * @return iterable<string, array{string, bool, bool, ?string}>
+     */
+    public static function getEntityBySlugsProvider(): iterable
+    {
+        yield 'id with alias' => [
+            '123:alias',
+            true,
+            true,
+            'alias',
+        ];
+
+        yield 'id with wrong alias (BC)' => [
+            '123:wrong-alias',
+            true,
+            true,
+            'real-alias',
+        ];
+
+        yield 'id with trailing colon' => [
+            '123:',
+            true,
+            true,
+            'alias',
+        ];
+
+        yield 'id with trailing colon but alias is null' => [
+            '123:',
+            true,
+            false,
+            null,
+        ];
+
+        yield 'bare id' => [
+            '123',
+            false,
+            false,
+            null,
+        ];
+
+        yield 'non-numeric id' => [
+            'abc:alias',
+            false,
+            false,
+            null,
+        ];
+
+        yield 'empty id' => [
+            ':alias',
+            false,
+            false,
+            null,
+        ];
+
+        yield 'id with empty alias (BC)' => [
+            '123:',
+            true,
+            true,
+            '',
+        ];
+    }
+}

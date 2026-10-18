@@ -1,0 +1,295 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\ConfigBundle\Tests\Form\Helper;
+
+use Mautic\ConfigBundle\Form\DataTransformer\DsnTransformer;
+use Mautic\ConfigBundle\Form\DataTransformer\DsnTransformerFactory;
+use Mautic\ConfigBundle\Form\Helper\RestrictionHelper;
+use Mautic\ConfigBundle\Form\Type\ConfigType;
+use Mautic\ConfigBundle\Form\Type\DsnType;
+use Mautic\ConfigBundle\Form\Type\EscapeTransformer;
+use Mautic\CoreBundle\Form\Type\ButtonGroupType;
+use Mautic\CoreBundle\Form\Type\FormButtonsType;
+use Mautic\CoreBundle\Form\Type\StandAloneButtonType;
+use Mautic\CoreBundle\Form\Type\YesNoButtonGroupType;
+use Mautic\CoreBundle\Helper\CoreParametersHelper;
+use Mautic\CoreBundle\Security\Permissions\CorePermissions;
+use Mautic\CoreBundle\Translation\Translator;
+use Mautic\EmailBundle\EventListener\ProcessBounceSubscriber;
+use Mautic\EmailBundle\EventListener\ProcessUnsubscribeSubscriber;
+use Mautic\EmailBundle\Form\Type\ConfigMonitoredEmailType;
+use Mautic\EmailBundle\Form\Type\ConfigMonitoredMailboxesType;
+use Mautic\EmailBundle\Form\Type\ConfigType as EmailConfigType;
+use Mautic\EmailBundle\MonitoredEmail\Mailbox;
+use Mautic\EmailBundle\MonitoredEmail\Processor\Bounce;
+use Mautic\EmailBundle\MonitoredEmail\Processor\FeedbackLoop;
+use Mautic\EmailBundle\MonitoredEmail\Processor\Unsubscribe;
+use Mautic\PageBundle\Entity\PageRepository;
+use Mautic\PageBundle\Form\Type\PreferenceCenterListType;
+use Mautic\PageBundle\Model\PageModel;
+use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\TestDox;
+use Symfony\Component\EventDispatcher\EventDispatcher;
+use Symfony\Component\Form\Extension\Core\Type\ChoiceType;
+use Symfony\Component\Form\Extension\Core\Type\NumberType;
+use Symfony\Component\Form\Extension\Core\Type\PasswordType;
+use Symfony\Component\Form\Extension\Core\Type\TextType;
+use Symfony\Component\Form\Extension\Validator\ValidatorExtension;
+use Symfony\Component\Form\Form;
+use Symfony\Component\Form\FormInterface;
+use Symfony\Component\Form\Forms;
+use Symfony\Component\Form\PreloadedExtension;
+use Symfony\Component\Form\Test\TypeTestCase;
+use Symfony\Component\Validator\ConstraintViolationList;
+use Symfony\Component\Validator\Mapping\ClassMetadata;
+use Symfony\Component\Validator\Validator\ValidatorInterface;
+
+/**
+ * Mocking a representative ConfigForm by leveraging Symfony's TypeTestCase to test RestrictionHelper.
+ */
+#[CoversClass(RestrictionHelper::class)]
+final class RestrictionHelperTest extends TypeTestCase
+{
+    private string $displayMode = RestrictionHelper::MODE_REMOVE;
+
+    /**
+     * @var array<array-key, mixed>
+     */
+    private array $restrictedFields = [
+        'monitored_email' => [
+            'EmailBundle_bounces',
+            'EmailBundle_unsubscribes' => [
+                'address',
+            ],
+        ],
+    ];
+
+    /**
+     * @var array<string, array<string, mixed>>
+     */
+    private array $forms = [
+        'emailconfig' => [
+            'bundle'     => 'EmailBundle',
+            'formAlias'  => 'emailconfig',
+            'formType'   => EmailConfigType::class,
+            'formTheme'  => 'MauticEmailBundle:FormTheme\\Config',
+            'parameters' => [
+                'mailer_from_name'                      => 'Mautic',
+                'mailer_from_email'                     => 'email@yoursite.com',
+                'mailer_return_path'                    => null,
+                'mailer_transport'                      => 'mail',
+                'mailer_append_tracking_pixel'          => true,
+                'mailer_convert_embed_images'           => false,
+                'mailer_dsn'                            => 'smtp://null:25',
+                'messenger_dsn_email'                   => 'doctrine://default',
+                'messenger_retry_strategy_max_retries'  => 3,
+                'messenger_retry_strategy_delay'        => 1000,
+                'messenger_retry_strategy_multiplier'   => 2,
+                'messenger_retry_strategy_max_delay'    => 0,
+                'unsubscribe_text'                      => null,
+                'webview_text'                          => null,
+                'unsubscribe_message'                   => null,
+                'resubscribe_message'                   => null,
+                'monitored_email'                       => [
+                    'general' => [
+                        'address'    => null,
+                        'host'       => null,
+                        'port'       => '993',
+                        'encryption' => '/ssl',
+                        'user'       => null,
+                        'password'   => null,
+                    ],
+                    'EmailBundle_bounces' => [
+                        'address'           => null,
+                        'host'              => null,
+                        'port'              => '993',
+                        'encryption'        => '/ssl',
+                        'user'              => null,
+                        'password'          => null,
+                        'override_settings' => 0,
+                        'folder'            => null,
+                    ],
+                    'EmailBundle_unsubscribes' => [
+                        'address'           => null,
+                        'host'              => null,
+                        'port'              => '993',
+                        'encryption'        => '/ssl',
+                        'user'              => null,
+                        'password'          => null,
+                        'override_settings' => 0,
+                        'folder'            => null,
+                    ],
+                    'EmailBundle_replies' => [
+                        'address'           => null,
+                        'host'              => null,
+                        'port'              => '993',
+                        'encryption'        => '/ssl',
+                        'user'              => null,
+                        'password'          => null,
+                        'override_settings' => 0,
+                        'folder'            => null,
+                    ],
+                ],
+                'mailer_is_owner'                     => false,
+                'default_signature_text'              => null,
+                'email_frequency_number'              => null,
+                'email_frequency_time'                => null,
+                'show_contact_preferences'            => false,
+                'show_contact_frequency'              => false,
+                'show_contact_pause_dates'            => false,
+                'show_contact_preferred_channels'     => false,
+                'show_contact_categories'             => false,
+                'show_contact_segments'               => false,
+                'mailer_mailjet_sandbox'              => false,
+                'mailer_mailjet_sandbox_default_mail' => null,
+                'disable_trackable_urls'              => false,
+            ],
+        ],
+    ];
+
+    #[TestDox('Test that the restricted fields are removed from the config')]
+    public function testRestrictedFieldsAreRemoved(): void
+    {
+        $form = $this->factory->create(ConfigType::class, $this->forms);
+
+        $this->assertTrue($form->has('emailconfig'));
+
+        $emailConfig = $form->get('emailconfig');
+
+        // monitored_email is partially restricted so should be included
+        $this->assertTrue($emailConfig->has('monitored_email'));
+
+        $monitoredEmail = $emailConfig->get('monitored_email');
+
+        // EmailBundle_bounces is restricted in entirety and thus should not be included
+        $this->assertFalse($monitoredEmail->has('EmailBundle_bounces'));
+
+        // EmailBundle_unsubscribes is partially restricted so should be included
+        $this->assertTrue($monitoredEmail->has('EmailBundle_unsubscribes'));
+
+        $unsubscribes = $monitoredEmail->get('EmailBundle_unsubscribes');
+
+        // address under EmailBundle_unsubscribes is restricted so should not be included
+        $this->assertFalse($unsubscribes->has('address'));
+
+        // host under EmailBundle_unsubscribes is not restricted so should be included
+        $this->assertTrue($unsubscribes->has('host'));
+    }
+
+    #[TestDox('Test that the restricted fields are masked')]
+    public function testRestrictedFieldsAreMasked(): void
+    {
+        $this->displayMode = RestrictionHelper::MODE_MASK;
+
+        // Rebuild factory to get updated RestrictionHelper
+        $this->factory = Forms::createFormFactoryBuilder()
+            ->addExtensions($this->getExtensions())
+            ->getFormFactory();
+
+        $form = $this->factory->create(ConfigType::class, $this->forms);
+        /** @var FormInterface<mixed> $address */
+        $address = $form['emailconfig']['monitored_email']['EmailBundle_unsubscribes']['address'];
+
+        $this->assertTrue($address->getConfig()->getOption('attr')['readonly']);
+        $this->assertTrue($address->getConfig()->getOption('disabled'));
+        $this->assertEquals(
+            [
+                'class'        => 'form-control',
+                'tooltip'      => 'mautic.email.config.monitored_email_address.tooltip',
+                'data-show-on' => '{"config_emailconfig_monitored_email_EmailBundle_unsubscribes_override_settings_1": "checked"}',
+                'placeholder'  => 'mautic.config.restricted',
+                'readonly'     => true,
+            ],
+            $address->getConfig()->getOption('attr')
+        );
+    }
+
+    #[TestDox('Test that adjacent restricted sibling fields are all removed')]
+    public function testAdjacentRestrictedSiblingFieldsAreRemoved(): void
+    {
+        $this->restrictedFields = [
+            'mailer_from_name',
+            'mailer_from_email',
+        ];
+
+        // Rebuild factory to get updated RestrictionHelper
+        $this->factory = Forms::createFormFactoryBuilder()
+            ->addExtensions($this->getExtensions())
+            ->getFormFactory();
+
+        $form = $this->factory->create(ConfigType::class, $this->forms);
+
+        $this->assertTrue($form->has('emailconfig'));
+
+        $emailConfig = $form->get('emailconfig');
+
+        $this->assertFalse($emailConfig->has('mailer_from_name'));
+        $this->assertFalse($emailConfig->has('mailer_from_email'));
+    }
+
+    /**
+     * @return array<int, PreloadedExtension|ValidatorExtension>
+     */
+    protected function getExtensions(): array
+    {
+        $translator = $this->createMock(Translator::class);
+        $translator->method('trans')
+            ->willReturnCallback(
+                fn (string $key): string => $key
+            );
+
+        $validator = $this->createMock(ValidatorInterface::class);
+        $validator
+            ->method('validate')
+            ->willReturn(new ConstraintViolationList());
+        $validator
+            ->method('getMetadataFor')
+            ->willReturn(new ClassMetadata(Form::class));
+
+        // Register monitored email listeners
+        $dispatcher = new EventDispatcher();
+        $dispatcher->addSubscriber(new ProcessBounceSubscriber($this->createStub(Bounce::class)));
+        $dispatcher->addSubscriber(new ProcessUnsubscribeSubscriber($this->createStub(Unsubscribe::class), $this->createStub(FeedbackLoop::class), $this->createStub(CoreParametersHelper::class)));
+
+        // This is what we're really testing here
+        $restrictionHelper = new RestrictionHelper($translator, $this->restrictedFields, $this->displayMode);
+        $escapeTransformer = new EscapeTransformer([]);
+
+        $coreParametersHelper  = $this->createStub(CoreParametersHelper::class);
+        $dsnTransformerFactory = $this->createMock(DsnTransformerFactory::class);
+        $dsnTransformerFactory->method('create')->willReturnCallback(
+            fn (string $configKey, bool $allowEmpty): DsnTransformer => new DsnTransformer($coreParametersHelper, $escapeTransformer, $configKey, $allowEmpty)
+        );
+
+        $pageRepoMock = $this->createMock(PageRepository::class);
+        $pageRepoMock->method('getPageList')->willReturn([]);
+        $pageModelMock = $this->createMock(PageModel::class);
+        $pageModelMock->method('getRepository')->willReturn($pageRepoMock);
+
+        return [
+            // register the type instances with the PreloadedExtension
+            new PreloadedExtension(
+                [
+                    new TextType(),
+                    new ChoiceType(),
+                    new YesNoButtonGroupType(),
+                    new PasswordType(),
+                    new StandAloneButtonType(),
+                    new NumberType(),
+                    new FormButtonsType(),
+                    new ButtonGroupType(),
+                    new EmailConfigType($translator),
+                    new DsnType($dsnTransformerFactory, $coreParametersHelper),
+                    new PreferenceCenterListType($pageModelMock, $this->createStub(CorePermissions::class)),
+                    new ConfigMonitoredEmailType($dispatcher),
+                    new ConfigMonitoredMailboxesType($this->createStub(Mailbox::class)),
+                    new ConfigType($restrictionHelper, $escapeTransformer),
+                ],
+                []
+            ),
+            new ValidatorExtension($validator),
+        ];
+    }
+}

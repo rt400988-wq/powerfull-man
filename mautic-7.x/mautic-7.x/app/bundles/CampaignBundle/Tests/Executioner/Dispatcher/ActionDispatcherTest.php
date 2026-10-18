@@ -1,0 +1,294 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\CampaignBundle\Tests\Executioner\Dispatcher;
+
+use Doctrine\Common\Collections\ArrayCollection;
+use Mautic\CampaignBundle\CampaignEvents;
+use Mautic\CampaignBundle\Entity\Event;
+use Mautic\CampaignBundle\Entity\LeadEventLog;
+use Mautic\CampaignBundle\Event\ExecutedBatchEvent;
+use Mautic\CampaignBundle\Event\ExecutedEvent;
+use Mautic\CampaignBundle\Event\FailedEvent;
+use Mautic\CampaignBundle\Event\PendingEvent;
+use Mautic\CampaignBundle\EventCollector\Accessor\Event\ActionAccessor;
+use Mautic\CampaignBundle\Executioner\Dispatcher\ActionDispatcher;
+use Mautic\CampaignBundle\Executioner\Dispatcher\Exception\LogNotProcessedException;
+use Mautic\CampaignBundle\Executioner\Dispatcher\LegacyEventDispatcher;
+use Mautic\CampaignBundle\Executioner\Scheduler\EventScheduler;
+use Mautic\LeadBundle\Entity\Lead;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\NullLogger;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+
+final class ActionDispatcherTest extends \PHPUnit\Framework\TestCase
+{
+    private MockObject&EventDispatcherInterface $dispatcher;
+
+    private MockObject&EventScheduler $scheduler;
+
+    private MockObject&LegacyEventDispatcher $legacyDispatcher;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->dispatcher         = $this->createMock(EventDispatcherInterface::class);
+        $this->scheduler          = $this->createMock(EventScheduler::class);
+        /** @phpstan-ignore classConstant.deprecatedClass */
+        $this->legacyDispatcher   = $this->createMock(LegacyEventDispatcher::class);
+    }
+
+    public function testActionBatchEventIsDispatchedWithSuccessAndFailedLogs(): void
+    {
+        $event = new Event();
+        $lead1 = $this->createMock(Lead::class);
+        $lead1->expects($this->exactly(2))
+            ->method('getId')
+            ->willReturn(1);
+
+        $lead2 = $this->createMock(Lead::class);
+        $lead2->expects($this->exactly(2))
+            ->method('getId')
+            ->willReturn(2);
+
+        $log1 = $this->createMock(LeadEventLog::class);
+        $log1->expects($this->exactly(2))
+            ->method('getLead')
+            ->willReturn($lead1);
+        $log1->method('setIsScheduled')
+            ->willReturn($log1);
+        $log1->method('getEvent')
+            ->willReturn($event);
+
+        $log2 = $this->createMock(LeadEventLog::class);
+        $log2->expects($this->exactly(2))
+            ->method('getLead')
+            ->willReturn($lead2);
+        $log2->method('getMetadata')
+            ->willReturn([]);
+        $log2->method('getEvent')
+            ->willReturn($event);
+
+        $logs = new ArrayCollection(
+            [
+                1 => $log1,
+                2 => $log2,
+            ]
+        );
+
+        $config = $this->createMock(ActionAccessor::class);
+        $config->expects($this->once())
+            ->method('getBatchEventName')
+            ->willReturn('something');
+
+        $dispatcCounter = 0;
+        $matcher        = $this->exactly(4);
+        $this->dispatcher->expects($matcher)
+            ->method('dispatch')
+            ->willReturnCallback(
+                function (\Symfony\Contracts\EventDispatcher\Event $event, string $eventName) use ($logs, &$dispatcCounter, $matcher): \Symfony\Contracts\EventDispatcher\Event {
+                    if (1 === $matcher->numberOfInvocations()) {
+                    }
+                    if (2 === $matcher->numberOfInvocations()) {
+                        $this->assertInstanceOf(ExecutedEvent::class, $event);
+                        $this->assertSame(CampaignEvents::ON_EVENT_EXECUTED, $eventName);
+                    }
+                    if (3 === $matcher->numberOfInvocations()) {
+                        $this->assertInstanceOf(ExecutedBatchEvent::class, $event);
+                        $this->assertSame(CampaignEvents::ON_EVENT_EXECUTED_BATCH, $eventName);
+                    }
+                    if (4 === $matcher->numberOfInvocations()) {
+                        $this->assertInstanceOf(FailedEvent::class, $event);
+                        $this->assertSame(CampaignEvents::ON_EVENT_FAILED, $eventName);
+                    }
+                    ++$dispatcCounter;
+                    if (1 === $dispatcCounter) {
+                        $this->assertInstanceOf(PendingEvent::class, $event);
+                        $event->pass($logs->get(1));
+                        $event->fail($logs->get(2), 'just because');
+                    } elseif (2 === $dispatcCounter) {
+                        $this->assertInstanceOf(ExecutedEvent::class, $event);
+                        $this->assertSame(CampaignEvents::ON_EVENT_EXECUTED, $eventName);
+                    } elseif (3 === $dispatcCounter) {
+                        $this->assertInstanceOf(ExecutedBatchEvent::class, $event);
+                        $this->assertSame(CampaignEvents::ON_EVENT_EXECUTED_BATCH, $eventName);
+                    } elseif (4 === $dispatcCounter) {
+                        $this->assertInstanceOf(FailedEvent::class, $event);
+                        $this->assertSame(CampaignEvents::ON_EVENT_FAILED, $eventName);
+                    } else {
+                        self::fail('Unknown event called.');
+                    }
+
+                    return $event;
+                }
+            );
+
+        $this->scheduler->expects($this->once())
+            ->method('rescheduleFailures')
+            ->willReturnCallback(
+                function (ArrayCollection $logs) use ($log2): void {
+                    if ($logs->count() > 1) {
+                        $this->fail('Only one log was supposed to fail');
+                    }
+
+                    $this->assertEquals($log2, $logs->first());
+                }
+            );
+
+        $this->legacyDispatcher->expects($this->once())
+            ->method('dispatchExecutionEvents');
+
+        $this->getEventDispatcher()->dispatchEvent($config, $event, $logs);
+    }
+
+    public function testActionLogNotProcessedExceptionIsThrownIfLogNotProcessedWithSuccess(): void
+    {
+        $this->expectException(LogNotProcessedException::class);
+
+        $event = new Event();
+        $lead1 = $this->createMock(Lead::class);
+        $lead1->expects($this->once())
+            ->method('getId')
+            ->willReturn(1);
+
+        $lead2 = $this->createMock(Lead::class);
+        $lead2->expects($this->once())
+            ->method('getId')
+            ->willReturn(2);
+
+        $log1 = $this->createMock(LeadEventLog::class);
+        $log1->expects($this->once())
+            ->method('getLead')
+            ->willReturn($lead1);
+        $log1->method('setIsScheduled')
+            ->willReturn($log1);
+        $log1->method('getEvent')
+            ->willReturn($event);
+
+        $log2 = $this->createMock(LeadEventLog::class);
+        $log2->expects($this->once())
+            ->method('getLead')
+            ->willReturn($lead2);
+        $log2->method('getMetadata')
+            ->willReturn([]);
+        $log2->method('getEvent')
+            ->willReturn($event);
+
+        $logs = new ArrayCollection(
+            [
+                1 => $log1,
+                2 => $log2,
+            ]
+        );
+
+        $config = $this->createMock(ActionAccessor::class);
+
+        $config->expects($this->once())
+            ->method('getBatchEventName')
+            ->willReturn('something');
+
+        $this->dispatcher->expects($this->once())
+            ->method('dispatch')
+            ->willReturnCallback(
+                function (PendingEvent $pendingEvent, string $eventName) use ($logs): PendingEvent {
+                    $pendingEvent->pass($logs->get(1));
+
+                    return $pendingEvent;
+                    // One log is not processed so the exception should be thrown
+                }
+            );
+
+        $this->getEventDispatcher()->dispatchEvent($config, $event, $logs);
+    }
+
+    public function testActionLogNotProcessedExceptionIsThrownIfLogNotProcessedWithFailed(): void
+    {
+        $this->expectException(LogNotProcessedException::class);
+
+        $event = new Event();
+
+        $lead1 = $this->createMock(Lead::class);
+        $lead1->expects($this->once())
+            ->method('getId')
+            ->willReturn(1);
+
+        $lead2 = $this->createMock(Lead::class);
+        $lead2->expects($this->once())
+            ->method('getId')
+            ->willReturn(2);
+
+        $log1 = $this->createMock(LeadEventLog::class);
+        $log1->expects($this->once())
+            ->method('getLead')
+            ->willReturn($lead1);
+        $log1->method('setIsScheduled')
+            ->willReturn($log1);
+        $log1->method('getEvent')
+            ->willReturn($event);
+
+        $log2 = $this->createMock(LeadEventLog::class);
+        $log2->expects($this->once())
+            ->method('getLead')
+            ->willReturn($lead2);
+        $log2->method('getMetadata')
+            ->willReturn([]);
+        $log2->method('getEvent')
+            ->willReturn($event);
+
+        $logs = new ArrayCollection(
+            [
+                1 => $log1,
+                2 => $log2,
+            ]
+        );
+
+        $config = $this->createMock(ActionAccessor::class);
+
+        $config->expects($this->once())
+            ->method('getBatchEventName')
+            ->willReturn('something');
+
+        $this->dispatcher->expects($this->once())
+            ->method('dispatch')
+            ->willReturnCallback(
+                function (PendingEvent $pendingEvent, string $eventName) use ($logs): PendingEvent {
+                    $pendingEvent->fail($logs->get(2), 'something');
+
+                    return $pendingEvent;
+                    // One log is not processed so the exception should be thrown
+                }
+            );
+
+        $this->getEventDispatcher()->dispatchEvent($config, $event, $logs);
+    }
+
+    public function testActionBatchEventIsIgnoredWithLegacy(): void
+    {
+        $event  = new Event();
+        $config = $this->createMock(ActionAccessor::class);
+
+        $config->expects($this->once())
+            ->method('getBatchEventName')
+            ->willReturn(null);
+
+        $this->dispatcher->expects($this->never())
+            ->method('dispatch');
+
+        $this->legacyDispatcher->expects($this->once())
+            ->method('dispatchCustomEvent');
+
+        $this->getEventDispatcher()->dispatchEvent($config, $event, new ArrayCollection());
+    }
+
+    private function getEventDispatcher(): ActionDispatcher
+    {
+        return new ActionDispatcher(
+            $this->dispatcher,
+            new NullLogger(),
+            $this->scheduler,
+            $this->legacyDispatcher
+        );
+    }
+}

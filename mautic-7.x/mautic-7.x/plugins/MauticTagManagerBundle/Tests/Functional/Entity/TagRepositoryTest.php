@@ -1,0 +1,40 @@
+<?php
+
+declare(strict_types=1);
+
+namespace MauticPlugin\MauticTagManagerBundle\Tests\Functional\Entity;
+
+use Mautic\CoreBundle\Test\MauticMysqlTestCase;
+use Mautic\LeadBundle\Entity\Tag;
+use MauticPlugin\MauticTagManagerBundle\Entity\TagRepository;
+
+final class TagRepositoryTest extends MauticMysqlTestCase
+{
+    private TagRepository $tagRepository;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->tagRepository = self::getContainer()->get(TagRepository::class);
+
+        $tags = [
+            'tag1',
+            'tag2',
+            'tag3',
+            'tag4',
+        ];
+
+        foreach ($tags as $tagName) {
+            $tag = new Tag();
+            $tag->setTag($tagName);
+            $this->tagRepository->saveEntity($tag);
+        }
+    }
+
+    public function testCountOccurencesReturnsCorrectQuantityOfTags(): void
+    {
+        $count = $this->tagRepository->countOccurrences('tag2');
+        $this->assertSame(1, $count);
+    }
+}

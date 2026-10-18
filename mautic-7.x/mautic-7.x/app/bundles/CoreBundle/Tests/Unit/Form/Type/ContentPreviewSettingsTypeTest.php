@@ -1,0 +1,502 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\CoreBundle\Tests\Unit\Form\Type;
+
+use Mautic\CoreBundle\Form\Type\ContentPreviewSettingsType;
+use Mautic\CoreBundle\Form\Type\LookupType;
+use Mautic\CoreBundle\Helper\UserHelper;
+use Mautic\CoreBundle\Security\Permissions\CorePermissions;
+use Mautic\EmailBundle\Entity\Email;
+use Mautic\UserBundle\Entity\User;
+use PHPUnit\Framework\Exception;
+use PHPUnit\Framework\MockObject\MockObject;
+use PHPUnit\Framework\TestCase;
+use Symfony\Component\Form\Extension\Core\Type\ChoiceType;
+use Symfony\Component\Form\FormBuilderInterface;
+use Symfony\Component\OptionsResolver\OptionsResolver;
+use Symfony\Contracts\Translation\TranslatorInterface;
+
+final class ContentPreviewSettingsTypeTest extends TestCase
+{
+    private ContentPreviewSettingsType $form;
+
+    /**
+     * @var MockObject&TranslatorInterface
+     */
+    private MockObject $translator;
+
+    /**
+     * @var MockObject&CorePermissions
+     */
+    private MockObject $security;
+
+    /**
+     * @var MockObject&UserHelper
+     */
+    private MockObject $userHelperMock;
+
+    /**
+     * @var mixed[]
+     */
+    private array $contactFieldDefinition = [
+        'contact',
+        LookupType::class,
+        [
+            'attr' => [
+                'class'                   => 'form-control',
+                'data-callback'           => 'activatePreviewContactLookupField',
+                'data-toggle'             => 'field-lookup',
+                'data-lookup-callback'    => 'updatePreviewContactLookupListFilter',
+                'data-chosen-lookup'      => 'lead:contactList',
+                'placeholder'             => 'startTyping',
+                'data-no-record-message'  => 'nomatches',
+            ],
+        ],
+    ];
+
+    /**
+     * @var mixed[]
+     */
+    private array $companyFieldDefinition = [
+        'company',
+        LookupType::class,
+        [
+            'attr' => [
+                'class'                   => 'form-control',
+                'data-callback'           => 'activatePreviewCompanyLookupField',
+                'data-toggle'             => 'field-lookup',
+                'data-lookup-callback'    => 'updatePreviewCompanyLookupListFilter',
+                'data-chosen-lookup'      => 'lead:companyList',
+                'placeholder'             => 'startTyping',
+                'data-no-record-message'  => 'nomatches',
+            ],
+        ],
+    ];
+
+    protected function setUp(): void
+    {
+        $this->translator     = $this->createMock(TranslatorInterface::class);
+        $this->security       = $this->createMock(CorePermissions::class);
+        $this->userHelperMock = $this->createMock(UserHelper::class);
+        $this->form           = new ContentPreviewSettingsType($this->translator, $this->security, $this->userHelperMock);
+
+        parent::setUp();
+    }
+
+    public function testConfigureOptions(): void
+    {
+        $resolver = $this->createMock(OptionsResolver::class);
+        $resolver->expects($this->once())
+            ->method('setDefaults')
+            ->with(
+                [
+                    'type'         => null,
+                    'objectId'     => null,
+                    'translations' => null,
+                    'variants'     => null,
+                ]
+            );
+
+        $resolver->expects($this->once())
+            ->method('setRequired')
+            ->with(['type', 'objectId']);
+
+        $resolver->expects($this->once())
+            ->method('addAllowedValues')
+            ->with('type', [ContentPreviewSettingsType::TYPE_PAGE, ContentPreviewSettingsType::TYPE_EMAIL]);
+
+        $resolver->expects($this->once())
+            ->method('addAllowedTypes')
+            ->with('objectId', 'int');
+
+        $this->form->configureOptions($resolver);
+    }
+
+    public function testGetBlockPrefix(): void
+    {
+        $this->assertSame('content_preview_settings', $this->form->getBlockPrefix());
+    }
+
+    public function testBuildFormWithTranslationAndVariantFieldNotAvailable(): void
+    {
+        $objectId = 1;
+        $options  = [
+            'objectId'      => $objectId,
+            'translations'  => [
+                'children' => [],
+            ],
+            'variants'     => [
+                'children' => [],
+            ],
+        ];
+        $matcher = $this->exactly(4);
+
+        $this->translator->expects($matcher)
+            ->method('trans')->willReturnCallback(function (...$parameters) use ($matcher): string {
+                if (in_array($matcher->numberOfInvocations(), [1, 3], true)) {
+                    $this->assertSame('mautic.lead.list.form.startTyping', $parameters[0]);
+
+                    return 'startTyping';
+                }
+                if (in_array($matcher->numberOfInvocations(), [2, 4], true)) {
+                    $this->assertSame('mautic.core.form.nomatches', $parameters[0]);
+
+                    return 'nomatches';
+                }
+
+                throw new Exception(sprintf('Method not be called for %dth time', $matcher->numberOfInvocations()));
+            });
+
+        $builder = $this->createMock(FormBuilderInterface::class);
+        $matcher = $this->exactly(2);
+        $builder->expects($matcher)
+            ->method('add')
+            ->willReturnCallback(
+                function (...$parameters) use ($matcher, $builder): MockObject {
+                    if (1 === $matcher->numberOfInvocations()) {
+                        $this->assertEquals($this->contactFieldDefinition, $parameters);
+                    }
+
+                    if (2 === $matcher->numberOfInvocations()) {
+                        $this->assertEquals($this->companyFieldDefinition, $parameters);
+                    }
+
+                    return $builder;
+                }
+            );
+
+        $this->security->expects($this->once())
+            ->method('isAdmin')
+            ->willReturn(true);
+        $this->security->expects($this->never())
+            ->method('hasEntityAccess');
+
+        $this->form->buildForm($builder, $options);
+    }
+
+    public function testBuildFormWithTranslationAndVariantFieldNotAvailableAndNoAccessPermissions(): void
+    {
+        $objectId = 1;
+        $userId   = 37;
+        $options  = [
+            'objectId'      => $objectId,
+            'translations'  => [
+                'children' => [],
+            ],
+            'variants'     => [
+                'children' => [],
+            ],
+        ];
+
+        $this->security->expects($this->once())
+            ->method('isAdmin')
+            ->willReturn(false);
+
+        $userMock = $this->createMock(User::class);
+        $userMock->expects($this->once())
+            ->method('getId')
+            ->willReturn($userId);
+
+        $this->userHelperMock->expects($this->once())
+            ->method('getUser')
+            ->willReturn($userMock);
+
+        $this->security->expects($this->once())
+            ->method('hasEntityAccess')
+            ->with('lead:leads:viewown', 'lead:leads:viewother', $userId)
+            ->willReturn(false);
+
+        $builder = $this->createMock(FormBuilderInterface::class);
+        $builder->expects($this->never())
+            ->method('add');
+        $this->form->buildForm($builder, $options);
+    }
+
+    public function testBuildFormWithTranslationAndVariantFieldNotAvailableAndAdminPermissions(): void
+    {
+        $objectId = 1;
+        $options  = [
+            'objectId'      => $objectId,
+            'translations'  => [
+                'children' => [],
+            ],
+            'variants'     => [
+                'children' => [],
+            ],
+        ];
+
+        $this->security->expects($this->once())
+            ->method('isAdmin')
+            ->willReturn(true);
+        $this->security->expects($this->never())
+            ->method('hasEntityAccess');
+        $matcher = $this->exactly(4);
+
+        $this->translator->expects($matcher)
+            ->method('trans')->willReturnCallback(function (...$parameters) use ($matcher): string {
+                if (in_array($matcher->numberOfInvocations(), [1, 3], true)) {
+                    $this->assertSame('mautic.lead.list.form.startTyping', $parameters[0]);
+
+                    return 'startTyping';
+                }
+                if (in_array($matcher->numberOfInvocations(), [2, 4], true)) {
+                    $this->assertSame('mautic.core.form.nomatches', $parameters[0]);
+
+                    return 'nomatches';
+                }
+
+                throw new Exception(sprintf('Method not be called for %dth time', $matcher->numberOfInvocations()));
+            });
+
+        $builder = $this->createMock(FormBuilderInterface::class);
+        $matcher = $this->exactly(2);
+        $builder->expects($matcher)
+            ->method('add')
+            ->willReturnCallback(
+                function (...$parameters) use ($matcher, $builder): MockObject {
+                    if (1 === $matcher->numberOfInvocations()) {
+                        $this->assertEquals($this->contactFieldDefinition, $parameters);
+                    }
+
+                    if (2 === $matcher->numberOfInvocations()) {
+                        $this->assertEquals($this->companyFieldDefinition, $parameters);
+                    }
+
+                    return $builder;
+                }
+            );
+
+        $this->form->buildForm($builder, $options);
+    }
+
+    public function testBuildFormWithTranslationAndVariantFieldNotAvailableAndEntityPermissions(): void
+    {
+        $userId   = 37;
+        $objectId = 1;
+        $options  = [
+            'objectId'      => $objectId,
+            'translations'  => [
+                'children' => [],
+            ],
+            'variants'     => [
+                'children' => [],
+            ],
+        ];
+
+        $this->security->expects($this->once())
+            ->method('isAdmin')
+            ->willReturn(false);
+
+        $userMock = $this->createMock(User::class);
+        $userMock->expects($this->once())
+            ->method('getId')
+            ->willReturn($userId);
+
+        $this->userHelperMock->expects($this->once())
+            ->method('getUser')
+            ->willReturn($userMock);
+
+        $this->security->expects($this->once())
+            ->method('hasEntityAccess')
+            ->with('lead:leads:viewown', 'lead:leads:viewother', $userId)
+            ->willReturn(true);
+        $matcher = $this->exactly(4);
+
+        $this->translator->expects($matcher)
+            ->method('trans')->willReturnCallback(function (...$parameters) use ($matcher): string {
+                if (in_array($matcher->numberOfInvocations(), [1, 3], true)) {
+                    $this->assertSame('mautic.lead.list.form.startTyping', $parameters[0]);
+
+                    return 'startTyping';
+                }
+                if (in_array($matcher->numberOfInvocations(), [2, 4], true)) {
+                    $this->assertSame('mautic.core.form.nomatches', $parameters[0]);
+
+                    return 'nomatches';
+                }
+
+                throw new Exception(sprintf('Method not be called for %dth time', $matcher->numberOfInvocations()));
+            });
+
+        $builder = $this->createMock(FormBuilderInterface::class);
+        $matcher = $this->exactly(2);
+        $builder->expects($matcher)
+            ->method('add')
+            ->willReturnCallback(
+                function (...$parameters) use ($matcher, $builder): MockObject {
+                    if (1 === $matcher->numberOfInvocations()) {
+                        $this->assertEquals($this->contactFieldDefinition, $parameters);
+                    }
+
+                    if (2 === $matcher->numberOfInvocations()) {
+                        $this->assertEquals($this->companyFieldDefinition, $parameters);
+                    }
+
+                    return $builder;
+                }
+            );
+
+        $this->form->buildForm($builder, $options);
+    }
+
+    public function testBuildFormWithTranslationAndVariantFieldAvailable(): void
+    {
+        $parentEmailId = 1;
+        $parentEmail   = $this->createEmail();
+        $parentEmail->setId($parentEmailId);
+        $parentEmail->setName('Parent');
+        $parentEmail->setLanguage('en');
+
+        $translationEmail1 = $this->createEmail();
+        $translationEmail1->setId(2);
+        $translationEmail1->setName('Translation 1');
+        $translationEmail1->setLanguage('cs_CZ');
+
+        $translationEmail2 = $this->createEmail();
+        $translationEmail2->setId(3);
+        $translationEmail2->setName('Translation 2');
+        $translationEmail2->setLanguage('dz_BT');
+
+        $expectedTranslationChoices = [
+            'Parent - English - ID 1'                  => 1,
+            'Translation 1 - Czech (Czechia) - ID 2'   => 2,
+            'Translation 2 - Dzongkha (Bhutan) - ID 3' => 3,
+        ];
+
+        $variantEmail1 = $this->createEmail();
+        $variantEmail1->setId(2);
+        $variantEmail1->setName('Variant 1');
+
+        $variantEmail2 = $this->createEmail();
+        $variantEmail2->setId(3);
+        $variantEmail2->setName('Variant 2');
+
+        $expectedVariantChoices = [
+            'Parent - ID 1'    => 1,
+            'Variant 1 - ID 2' => 2,
+            'Variant 2 - ID 3' => 3,
+        ];
+
+        $formOptions = [
+            'objectId'      => $parentEmailId,
+            'translations'  => [
+                'parent'   => $parentEmail,
+                'children' => [
+                    $translationEmail1,
+                    $translationEmail2,
+                ],
+            ],
+            'variants' => [
+                'parent'   => $parentEmail,
+                'children' => [
+                    $variantEmail1,
+                    $variantEmail2,
+                ],
+            ],
+        ];
+
+        $this->security->expects($this->once())
+            ->method('isAdmin')
+            ->willReturn(true);
+        $this->security->expects($this->never())
+            ->method('hasEntityAccess');
+        $matcher = $this->exactly(6);
+
+        $this->translator->expects($matcher)
+            ->method('trans')->willReturnCallback(function (...$parameters) use ($matcher): string {
+                if (1 === $matcher->numberOfInvocations()) {
+                    $this->assertSame('mautic.core.form.chooseone', $parameters[0]);
+
+                    return 'chooseone';
+                }
+                if (2 === $matcher->numberOfInvocations()) {
+                    $this->assertSame('mautic.core.form.chooseone', $parameters[0]);
+
+                    return 'chooseone';
+                }
+                if (3 === $matcher->numberOfInvocations()) {
+                    $this->assertSame('mautic.lead.list.form.startTyping', $parameters[0]);
+
+                    return 'startTyping';
+                }
+                if (4 === $matcher->numberOfInvocations()) {
+                    $this->assertSame('mautic.core.form.nomatches', $parameters[0]);
+
+                    return 'nomatches';
+                }
+                if (in_array($matcher->numberOfInvocations(), [3, 5], true)) {
+                    $this->assertSame('mautic.lead.list.form.startTyping', $parameters[0]);
+
+                    return 'startTyping';
+                }
+                if (in_array($matcher->numberOfInvocations(), [4, 6], true)) {
+                    $this->assertSame('mautic.core.form.nomatches', $parameters[0]);
+
+                    return 'nomatches';
+                }
+
+                throw new Exception(sprintf('Method not be called for %dth time', $matcher->numberOfInvocations()));
+            });
+
+        $formBuilder = $this->createMock(FormBuilderInterface::class);
+        $matcher     = $this->exactly(4);
+        $formBuilder->expects($matcher)
+            ->method('add')->willReturnCallback(function (...$parameters) use ($matcher, $expectedTranslationChoices, $parentEmailId, $expectedVariantChoices, $formBuilder): MockObject {
+                if (1 === $matcher->numberOfInvocations()) {
+                    $this->assertSame('translation', $parameters[0]);
+                    $this->assertSame(ChoiceType::class, $parameters[1]);
+                    $this->assertSame([
+                        'choices' => $expectedTranslationChoices,
+                        'attr'    => [
+                            'onChange' => "Mautic.contentPreviewUrlGenerator.regenerateUrl({$parentEmailId}, this)",
+                        ],
+                        'placeholder'  => 'chooseone',
+                        'data'         => (string) $parentEmailId,
+                    ], $parameters[2]);
+                }
+                if (2 === $matcher->numberOfInvocations()) {
+                    $this->assertSame('variant', $parameters[0]);
+                    $this->assertSame(ChoiceType::class, $parameters[1]);
+                    $this->assertSame([
+                        'choices' => $expectedVariantChoices,
+                        'attr'    => [
+                            'onChange' => "Mautic.contentPreviewUrlGenerator.regenerateUrl({$parentEmailId}, this)",
+                        ],
+                        'placeholder'  => 'chooseone',
+                        'data'         => (string) $parentEmailId,
+                    ], $parameters[2]);
+                }
+                if (3 === $matcher->numberOfInvocations()) {
+                    $this->assertEquals($this->contactFieldDefinition, $parameters);
+                }
+                if (4 === $matcher->numberOfInvocations()) {
+                    $this->assertEquals($this->companyFieldDefinition, $parameters);
+                }
+
+                return $formBuilder;
+            });
+
+        $this->form->buildForm($formBuilder, $formOptions);
+    }
+
+    private function createEmail(): Email
+    {
+        return new class() extends Email {
+            private int $id = 0;
+
+            public function getId(): int
+            {
+                return $this->id;
+            }
+
+            public function setId(int $id): Email
+            {
+                $this->id = $id;
+
+                return $this;
+            }
+        };
+    }
+}

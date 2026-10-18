@@ -1,0 +1,54 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\LeadBundle\Tests\Field;
+
+use Mautic\LeadBundle\Field\FieldList;
+use Mautic\LeadBundle\Field\FieldsWithUniqueIdentifier;
+use PHPUnit\Framework\MockObject\MockObject;
+use PHPUnit\Framework\TestCase;
+
+final class FieldsWithUniqueIdentifierTest extends TestCase
+{
+    /**
+     * @var MockObject&FieldList
+     */
+    private MockObject $fieldList;
+
+    private FieldsWithUniqueIdentifier $fieldsWithUniqueIdentifier;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->fieldList                  = $this->createMock(FieldList::class);
+        $this->fieldsWithUniqueIdentifier = new FieldsWithUniqueIdentifier($this->fieldList);
+    }
+
+    public function testCacheIsUsed(): void
+    {
+        $fields = ['cached fields'];
+        $this->fieldList->expects($this->once())
+            ->method('getFieldList')
+            ->willReturn($fields);
+
+        $this->assertSame($fields, $this->fieldsWithUniqueIdentifier->getFieldsWithUniqueIdentifier(['isPublished' => false]));
+
+        // The cache should be used on subsequent requests and a second call to getFieldList not made
+        $this->assertSame($fields, $this->fieldsWithUniqueIdentifier->getFieldsWithUniqueIdentifier(['isPublished' => false]));
+    }
+
+    public function testCacheIsNotUsed(): void
+    {
+        $fields = ['cached fields'];
+        $this->fieldList->expects($this->exactly(2))
+            ->method('getFieldList')
+            ->willReturn($fields);
+
+        $this->assertSame($fields, $this->fieldsWithUniqueIdentifier->getLiveFields(['isPublished' => false]));
+
+        // The cache should not be used on subsequent requests
+        $this->assertSame($fields, $this->fieldsWithUniqueIdentifier->getLiveFields(['isPublished' => false]));
+    }
+}

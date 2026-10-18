@@ -1,0 +1,264 @@
+package emailverifier
+
+import (
+	"errors"
+	"fmt"
+	"net/textproto"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+const (
+	// Standard Errors
+	ErrTimeout           = "The connection to the mail server has timed out"
+	ErrNoSuchHost        = "Mail server does not exist"
+	ErrServerUnavailable = "Mail server is unavailable"
+	ErrBlocked           = "Blocked by mail server"
+
+	// RCPT Errors
+	ErrTryAgainLater           = "Try again later"
+	ErrFullInbox               = "Recipient out of disk space"
+	ErrTooManyRCPT             = "Too many recipients"
+	ErrNoRelay                 = "Not an open relay"
+	ErrMailboxBusy             = "Mailbox busy"
+	ErrExceededMessagingLimits = "Messaging limits have been exceeded"
+	ErrNotAllowed              = "Not Allowed"
+	ErrNeedMAILBeforeRCPT      = "Need MAIL before RCPT"
+	ErrRCPTHasMoved            = "Recipient has moved"
+)
+
+// LookupError is an MX dns records lookup error
+type LookupError struct {
+	Message string `json:"message" xml:"message"`
+	Details string `json:"details" xml:"details"`
+
+	// cause is the error this was derived from. It is deliberately unexported
+	// and not serialised; it exists so that callers can use errors.Is and
+	// errors.As to reach the underlying *net.DNSError, *net.OpError or
+	// *textproto.Error instead of having to match on Details.
+	cause error
+
+	// enhanced is the RFC 3463 enhanced status code the server sent, if any.
+	enhanced string
+}
+
+// newLookupError creates a new LookupError reference and returns it
+func newLookupError(message, details string) *LookupError {
+	return &LookupError{Message: message, Details: details}
+}
+
+// withCause records the error this LookupError was derived from, so that
+// errors.Is and errors.As can see through to it.
+func (e *LookupError) withCause(cause error) *LookupError {
+	if e == nil {
+		return nil
+	}
+	e.cause = cause
+	return e
+}
+
+// Unwrap returns the error this LookupError was derived from, if any.
+func (e *LookupError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+// EnhancedCode returns the RFC 3463 enhanced status code the server sent, for
+// example "5.7.1", or an empty string if it sent none. Several large providers
+// send none, so callers must handle the empty case rather than read it as a
+// classification.
+//
+// The class digit is dependable -- 2 success, 4 transient, 5 permanent -- but
+// the subject is evidence, not a verdict: providers disagree with the registry
+// and with each other over which subject an unknown recipient gets.
+func (e *LookupError) EnhancedCode() string {
+	if e == nil {
+		return ""
+	}
+	return e.enhanced
+}
+
+func (e *LookupError) Error() string {
+	return fmt.Sprintf("%s : %s", e.Message, e.Details)
+}
+
+// enhancedCodeInReplyPattern matches the code in a reply that reaches us
+// flattened into one string: right after the reply code, so that the IP
+// addresses and diagnostic identifiers these replies carry are not mistaken for
+// one.
+var enhancedCodeInReplyPattern = regexp.MustCompile(`^[245][0-9]{2}[ -]\s*([245]\.[0-9]{1,3}\.[0-9]{1,3})\b`)
+
+// enhancedCodeInMsgPattern matches it where textproto keeps it: Code has been
+// split off, so the enhanced code starts Msg.
+var enhancedCodeInMsgPattern = regexp.MustCompile(`^\s*([245]\.[0-9]{1,3}\.[0-9]{1,3})\b`)
+
+// blockedKeywords mark a reply as a refusal of us rather than of the address.
+// One list: the 550 branch and parseBasicErr had drifted apart.
+var blockedKeywords = []string{
+	"spamhaus",
+	"proofpoint",
+	"cloudmark",
+	"banned",
+	"blacklisted",
+	"blocked",
+	"block list",
+	"denied",
+}
+
+// replyText returns the server's reply as it arrived. textproto.Error renders
+// with %q, which wraps the text in quotes and escapes a multi-line reply's
+// newlines, so Error() is a debug form rather than the reply. Errors carrying no
+// reply of their own fall back to it.
+func replyText(err error) string {
+	var tp *textproto.Error
+	if errors.As(err, &tp) {
+		return fmt.Sprintf("%03d %s", tp.Code, tp.Msg)
+	}
+	return err.Error()
+}
+
+// enhancedCodeOf extracts the enhanced status code from an SMTP reply. It starts
+// textproto.Error's Msg; Error() renders that with %q, which puts the code behind
+// a quote, so the rendered form serves only replies that reach us already
+// flattened -- ParseSMTPError is exported and takes those too.
+func enhancedCodeOf(err error) string {
+	var tp *textproto.Error
+	if errors.As(err, &tp) {
+		if m := enhancedCodeInMsgPattern.FindStringSubmatch(tp.Msg); len(m) > 1 {
+			return m[1]
+		}
+		return ""
+	}
+	if m := enhancedCodeInReplyPattern.FindStringSubmatch(err.Error()); len(m) > 1 {
+		return m[1]
+	}
+	return ""
+}
+
+// ParseSMTPError receives an MX Servers response message
+// and generates the corresponding MX error.
+//
+// A non-nil err always yields a non-nil result: an error we cannot classify is
+// reported verbatim rather than discarded. Returning nil here would hand the
+// caller a non-nil error interface wrapping a nil *LookupError, whose Error
+// method then panics.
+func ParseSMTPError(err error) *LookupError {
+	if err == nil {
+		return nil
+	}
+	le := parseSMTPError(err)
+	if le == nil {
+		errStr := replyText(err)
+		le = newLookupError(errStr, errStr)
+	}
+	le.enhanced = enhancedCodeOf(err)
+	return le.withCause(err)
+}
+
+func parseSMTPError(err error) *LookupError {
+	errStr := replyText(err)
+
+	// Verify the length of the error before reading nil indexes
+	if len(errStr) < 3 {
+		return parseBasicErr(err)
+	}
+
+	// Strips out the status code string and converts to an integer for parsing
+	status, convErr := strconv.Atoi(string([]rune(errStr)[0:3]))
+	if convErr != nil {
+		return parseBasicErr(err)
+	}
+
+	if status > 400 {
+		// Only a permanent reply can be read as a statement about the address: a
+		// 4xx says the server could not answer now, whatever its text mentions.
+		// Bounded above too, since ParseSMTPError is exported and a code outside
+		// SMTP's classes says nothing about a recipient either.
+		if status >= 500 && status < 600 && insContains(errStr,
+			"undeliverable",
+			"does not exist",
+			"may not exist",
+			"user unknown",
+			"user not found",
+			"invalid address",
+			"recipient invalid",
+			"recipient rejected",
+			"address rejected",
+			"no mailbox") {
+			return newLookupError(ErrServerUnavailable, errStr)
+		}
+
+		switch status {
+		case 421:
+			return newLookupError(ErrTryAgainLater, errStr)
+		case 450:
+			return newLookupError(ErrMailboxBusy, errStr)
+		case 451:
+			return newLookupError(ErrExceededMessagingLimits, errStr)
+		case 452:
+			if insContains(errStr,
+				"full",
+				"space",
+				"over quota",
+				"insufficient",
+			) {
+				return newLookupError(ErrFullInbox, errStr)
+			}
+			return newLookupError(ErrTooManyRCPT, errStr)
+		case 503:
+			return newLookupError(ErrNeedMAILBeforeRCPT, errStr)
+		case 550: // 550 is Mailbox Unavailable - usually undeliverable, ref: https://blog.mailtrap.io/550-5-1-1-rejected-fix/
+			if insContains(errStr, blockedKeywords...) {
+				return newLookupError(ErrBlocked, errStr)
+			}
+			return newLookupError(ErrServerUnavailable, errStr)
+		case 551:
+			return newLookupError(ErrRCPTHasMoved, errStr)
+		case 552:
+			return newLookupError(ErrFullInbox, errStr)
+		case 553:
+			return newLookupError(ErrNoRelay, errStr)
+		case 554:
+			return newLookupError(ErrNotAllowed, errStr)
+		default:
+			return parseBasicErr(err)
+		}
+	}
+	return nil
+}
+
+// parseBasicErr parses a basic MX record response and returns
+// a more understandable LookupError
+func parseBasicErr(err error) *LookupError {
+	errStr := replyText(err)
+
+	// Return a more understandable error
+	switch {
+	case insContains(errStr, blockedKeywords...):
+		return newLookupError(ErrBlocked, errStr)
+	case insContains(errStr, "timeout"):
+		return newLookupError(ErrTimeout, errStr)
+	case insContains(errStr, "no such host"):
+		return newLookupError(ErrNoSuchHost, errStr)
+	case insContains(errStr, "unavailable"):
+		return newLookupError(ErrServerUnavailable, errStr)
+	default:
+		return newLookupError(errStr, errStr)
+	}
+}
+
+// insContains returns true if any of the substrings
+// are found in the passed string. This method of checking
+// contains is case insensitive
+func insContains(str string, subStrs ...string) bool {
+	for _, subStr := range subStrs {
+		if strings.Contains(strings.ToLower(str),
+			strings.ToLower(subStr)) {
+			return true
+		}
+	}
+	return false
+}

@@ -1,0 +1,316 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\LeadBundle\Tests\EventListener;
+
+use Mautic\LeadBundle\Entity\Company;
+use Mautic\LeadBundle\Entity\DoNotContact;
+use Mautic\LeadBundle\Entity\Lead;
+use Mautic\LeadBundle\Entity\LeadRepository;
+use Mautic\LeadBundle\Event\ChannelSubscriptionChange;
+use Mautic\LeadBundle\Event\CompanyEvent;
+use Mautic\LeadBundle\Event\LeadChangeCompanyEvent;
+use Mautic\LeadBundle\Event\LeadEvent;
+use Mautic\LeadBundle\Event\ListChangeEvent;
+use Mautic\LeadBundle\EventListener\WebhookSubscriber;
+use Mautic\LeadBundle\LeadEvents;
+use Mautic\LeadBundle\Model\LeadModel;
+use Mautic\WebhookBundle\Model\WebhookModel;
+use PHPUnit\Framework\Attributes\TestDox;
+use Symfony\Component\EventDispatcher\EventDispatcher;
+
+final class WebhookSubscriberTest extends \PHPUnit\Framework\TestCase
+{
+    private \Symfony\Component\EventDispatcher\EventDispatcherInterface $dispatcher;
+
+    /**
+     * @var \PHPUnit\Framework\MockObject\MockObject&WebhookModel
+     */
+    private \PHPUnit\Framework\MockObject\MockObject $mockModel;
+
+    protected function setUp(): void
+    {
+        $this->dispatcher = new EventDispatcher();
+        $this->mockModel  = $this->createMock(WebhookModel::class);
+    }
+
+    public function testNewContactEventIsFiredWhenIdentified(): void
+    {
+        $this->mockModel->expects($this->once())
+            ->method('queueWebhooksByType')
+            ->with(
+                LeadEvents::LEAD_POST_SAVE.'_new'
+            );
+
+        $webhookSubscriber = new WebhookSubscriber($this->mockModel, $this->createStub(LeadModel::class), $this->createStub(LeadRepository::class));
+
+        $this->dispatcher->addSubscriber($webhookSubscriber);
+
+        $lead = new Lead();
+        $lead->setEmail('hello@hello.com');
+        $lead->setDateIdentified(new \DateTime());
+        $event = new LeadEvent($lead, true);
+        $this->dispatcher->dispatch($event, LeadEvents::LEAD_POST_SAVE);
+    }
+
+    public function testUpdateContactEventIsFiredWhenUpdatedButWithoutDateIdentified(): void
+    {
+        $this->mockModel  = $this->createMock(WebhookModel::class);
+
+        $this->mockModel->expects($this->once())
+            ->method('queueWebhooksByType')
+            ->with(
+                LeadEvents::LEAD_POST_SAVE.'_update'
+            );
+
+        $webhookSubscriber = new WebhookSubscriber($this->mockModel, $this->createStub(LeadModel::class), $this->createStub(LeadRepository::class));
+
+        $this->dispatcher->addSubscriber($webhookSubscriber);
+
+        $lead = new Lead();
+        $lead->setEmail('hello@hello.com');
+        // remove date identified so it'll simulate a simple update
+        $lead->resetChanges();
+        $event = new LeadEvent($lead, false);
+        $this->dispatcher->dispatch($event, LeadEvents::LEAD_POST_SAVE);
+    }
+
+    public function testWebhookIsNotDeliveredIfContactIsAVisitor(): void
+    {
+        $this->mockModel  = $this->createMock(WebhookModel::class);
+
+        $this->mockModel->expects($this->exactly(0))
+            ->method('queueWebhooksByType');
+
+        $webhookSubscriber = new WebhookSubscriber($this->mockModel, $this->createStub(LeadModel::class), $this->createStub(LeadRepository::class));
+
+        $this->dispatcher->addSubscriber($webhookSubscriber);
+
+        $lead  = new Lead();
+        $event = new LeadEvent($lead, false);
+        $this->dispatcher->dispatch($event, LeadEvents::LEAD_POST_SAVE);
+    }
+
+    public function testWebhookIsNotDeliveredIfContactIsWithoutChanges(): void
+    {
+        $mockModel  = $this->createMock(WebhookModel::class);
+        $leadModel  = $this->createStub(LeadModel::class);
+
+        $mockModel->expects($this->exactly(0))
+            ->method('queueWebhooksByType');
+
+        $webhookSubscriber = new WebhookSubscriber($mockModel, $leadModel, $this->createStub(LeadRepository::class));
+
+        $this->dispatcher->addSubscriber($webhookSubscriber);
+
+        $lead  = new Lead();
+        $lead->setEmail('test@test.com');
+        $lead->setChanges([]);
+        $event = new LeadEvent($lead, false);
+        $this->dispatcher->dispatch($event, LeadEvents::LEAD_POST_SAVE);
+    }
+
+    #[TestDox('Test that webhook is queued for channel subscription changes')]
+    public function testChannelChangeIsPickedUpByWebhook(): void
+    {
+        $this->mockModel = $this->createMock(WebhookModel::class);
+
+        $lead    = new Lead();
+        $channel = 'email';
+
+        $this->mockModel->expects($this->exactly(1))
+            ->method('queueWebhooksByType')
+            ->with(
+                LeadEvents::CHANNEL_SUBSCRIPTION_CHANGED,
+                [
+                    'contact'    => $lead,
+                    'channel'    => $channel,
+                    'old_status' => 'contactable',
+                    'new_status' => 'unsubscribed',
+                ],
+
+                [
+                    'leadDetails',
+                    'userList',
+                    'publishDetails',
+                    'ipAddress',
+                    'doNotContactList',
+                    'tagList',
+                ]
+            );
+
+        $webhookSubscriber = new WebhookSubscriber($this->mockModel, $this->createStub(LeadModel::class), $this->createStub(LeadRepository::class));
+
+        $this->dispatcher->addSubscriber($webhookSubscriber);
+
+        $event = new ChannelSubscriptionChange($lead, $channel, DoNotContact::IS_CONTACTABLE, DoNotContact::UNSUBSCRIBED);
+        $this->dispatcher->dispatch($event, LeadEvents::CHANNEL_SUBSCRIPTION_CHANGED);
+    }
+
+    #[TestDox('Test that webhook is queued for lead company changes')]
+    public function testLeadCompanyChangeIsPickedUpByWebhook(): void
+    {
+        $this->mockModel = $this->createMock(WebhookModel::class);
+
+        $lead    = new Lead();
+        $company = new Company();
+
+        $this->mockModel->expects($this->exactly(1))
+            ->method('queueWebhooksByType')
+            ->with(
+                LeadEvents::LEAD_COMPANY_CHANGE,
+                [
+                    'added'      => true,
+                    'contact'    => $lead,
+                    'company'    => $company,
+                ],
+                [
+                ]
+            );
+
+        $webhookSubscriber = new WebhookSubscriber($this->mockModel, $this->createStub(LeadModel::class), $this->createStub(LeadRepository::class));
+
+        $this->dispatcher->addSubscriber($webhookSubscriber);
+
+        $event = new LeadChangeCompanyEvent($lead, $company);
+        $this->dispatcher->dispatch($event, LeadEvents::LEAD_COMPANY_CHANGE);
+    }
+
+    public function testOnCompanySaveAndDelete(): void
+    {
+        $dispatcher       = new EventDispatcher();
+        $this->mockModel  = $this->createMock(WebhookModel::class);
+
+        $this->mockModel->expects($this->exactly(2))
+            ->method('queueWebhooksByType');
+
+        $webhookSubscriber = new WebhookSubscriber($this->mockModel, $this->createStub(LeadModel::class), $this->createStub(LeadRepository::class));
+
+        $dispatcher->addSubscriber($webhookSubscriber);
+
+        $company = new Company();
+        $company->setName('company');
+        $event = new CompanyEvent($company);
+        $dispatcher->dispatch($event, LeadEvents::COMPANY_POST_SAVE);
+        $dispatcher->dispatch($event, LeadEvents::COMPANY_POST_DELETE);
+    }
+
+    public function testOnSegmentChangeWithArrayContact(): void
+    {
+        $changeEvent = $this->createMock(ListChangeEvent::class);
+
+        $contact       = ['id' => 1];
+        $contactEntity = new Lead();
+        $contactEntity->setId($contact['id']);
+
+        $changeEvent->method('getLeads')->willReturn([$contact]);
+        $changeEvent->method('getLead')->willReturn(null);
+        $changeEvent->method('wasAdded')->willReturn(true);
+
+        $leadRepository = $this->createMock(LeadRepository::class);
+        $leadRepository->expects($this->once())
+            ->method('detachEntity')
+            ->with($contactEntity);
+
+        $leadModel    = $this->createMock(LeadModel::class);
+        $webhookModel = $this->createMock(WebhookModel::class);
+
+        $leadModel->expects($this->once())
+            ->method('getEntity')
+            ->with($contact['id'])
+            ->willReturn($contactEntity);
+
+        $webhookModel->expects($this->once())
+            ->method('queueWebhooksByType')
+            ->with(
+                LeadEvents::LEAD_LIST_CHANGE,
+                [
+                    'contact'  => $contactEntity,
+                    'segment'  => $changeEvent->getList(),
+                    'action'   => 'added',
+                ]
+            );
+
+        $example = new WebhookSubscriber($webhookModel, $leadModel, $leadRepository);
+
+        $example->onSegmentChange($changeEvent);
+    }
+
+    public function testOnSegmentBatchChangeWithObjectContact(): void
+    {
+        $changeEvent = $this->createMock(ListChangeEvent::class);
+
+        $contactEntity = new Lead();
+
+        $changeEvent->method('getLeads')->willReturn([$contactEntity]);
+        $changeEvent->method('getLead')->willReturn(null);
+        $changeEvent->method('wasAdded')->willReturn(true);
+
+        $leadModel      = $this->createMock(LeadModel::class);
+        $webhookModel   = $this->createMock(WebhookModel::class);
+        $leadRepository = $this->createMock(LeadRepository::class);
+
+        $leadRepository->expects($this->never())
+            ->method('detachEntity');
+
+        $leadModel->expects($this->never())
+            ->method('getEntity');
+
+        $webhookModel->expects($this->once())
+            ->method('queueWebhooksByType')
+            ->with(
+                LeadEvents::LEAD_LIST_CHANGE,
+                [
+                    'contact'  => $contactEntity,
+                    'segment'  => $changeEvent->getList(),
+                    'action'   => 'added',
+                ]
+            );
+
+        $example = new WebhookSubscriber($webhookModel, $leadModel, $leadRepository);
+
+        $example->onSegmentBatchChange($changeEvent);
+    }
+
+    public function testOnSegmentBatchChangeWithArrayContact(): void
+    {
+        $changeEvent = $this->createMock(ListChangeEvent::class);
+
+        $contact       = ['id' => 1];
+        $contactEntity = new Lead();
+        $contactEntity->setId($contact['id']);
+
+        $changeEvent->method('getLeads')->willReturn([$contact]);
+        $changeEvent->method('getLead')->willReturn(null);
+        $changeEvent->method('wasAdded')->willReturn(true);
+
+        $leadModel      = $this->createMock(LeadModel::class);
+        $webhookModel   = $this->createMock(WebhookModel::class);
+        $leadRepository = $this->createMock(LeadRepository::class);
+
+        $leadRepository->expects($this->once())
+            ->method('detachEntity')
+            ->with($contactEntity);
+
+        $leadModel->expects($this->once())
+            ->method('getEntity')
+            ->with($contact['id'])
+            ->willReturn($contactEntity);
+
+        $webhookModel->expects($this->once())
+            ->method('queueWebhooksByType')
+            ->with(
+                LeadEvents::LEAD_LIST_CHANGE,
+                [
+                    'contact'  => $contactEntity,
+                    'segment'  => $changeEvent->getList(),
+                    'action'   => 'added',
+                ]
+            );
+
+        $example = new WebhookSubscriber($webhookModel, $leadModel, $leadRepository);
+
+        $example->onSegmentBatchChange($changeEvent);
+    }
+}

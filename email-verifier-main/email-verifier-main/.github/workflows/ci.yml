@@ -1,0 +1,64 @@
+name: CI Actions  # don't edit while the badge was depend on this
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - v*
+
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  lint:
+    name: Lint
+    permissions:
+      contents: read
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout Code Base
+        uses: actions/checkout@v7
+
+      - name: Install Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.x'
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          # Must be built with a Go at least as new as the `go` directive in
+          # go.mod, or it refuses to run: "the Go language version (go1.24)
+          # used to build golangci-lint is lower than the targeted Go version".
+          version: v2.13.2
+
+  test:
+    name: Test
+    permissions:
+      contents: read
+
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The three most recent Go releases, which is what this module supports.
+        # The oldest of them is the `go` directive in go.mod, so raising that
+        # means dropping an entry here, and vice versa.
+        go-version: ['1.25.x', '1.26.x', '1.27.x']
+
+    steps:
+
+      - name: Checkout Code Base
+        uses: actions/checkout@v7
+
+      - name: Install Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{matrix.go-version}}
+
+      - name: Test
+        run: make test

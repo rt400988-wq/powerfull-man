@@ -1,0 +1,134 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\ConfigBundle\Tests\Event;
+
+use Mautic\ConfigBundle\Event\ConfigEvent;
+use Symfony\Component\HttpFoundation\File\UploadedFile;
+use Symfony\Component\HttpFoundation\ParameterBag;
+
+final class ConfigEventTest extends \PHPUnit\Framework\TestCase
+{
+    public function testGetSetConfig(): void
+    {
+        // Config not defined
+        $config   = [];
+        $paramBag = $this->createStub(ParameterBag::class);
+        $event    = new ConfigEvent($config, $paramBag);
+        $key      = 'undefined';
+        $this->assertEquals([], $event->getConfig($key));
+
+        // Config defined with setter
+        $key    = 'defined';
+        $config = ['config' => []];
+        $event->setConfig($config, $key);
+        $this->assertEquals($config, $event->getConfig($key));
+
+        // Config not found by key so complete config returned;
+        $undefinedKey = 'undefined';
+        $this->assertEquals([], $event->getConfig($undefinedKey));
+
+        // Get complete config
+        $config = [$key => $config];
+        $this->assertEquals($config, $event->getConfig());
+    }
+
+    public function testGetSetPreserved(): void
+    {
+        $config   = [];
+        $paramBag = $this->createStub(ParameterBag::class);
+        $event    = new ConfigEvent($config, $paramBag);
+
+        $this->assertSame([], $event->getPreservedFields());
+
+        $preserved = 'preserved';
+        $result    = [$preserved];
+        $event->unsetIfEmpty($preserved);
+        $this->assertSame($result, $event->getPreservedFields());
+
+        $preserved = ['preserved' => 'value'];
+        $result    = array_merge($result, $preserved);
+        $event->unsetIfEmpty($preserved);
+        $this->assertEquals($result, $event->getPreservedFields());
+    }
+
+    public function testGetSetErrors(): void
+    {
+        $config   = [];
+        $paramBag = $this->createStub(ParameterBag::class);
+        $event    = new ConfigEvent($config, $paramBag);
+
+        $this->assertSame([], $event->getErrors());
+
+        $message  = 'message';
+        $messages = [$message => []];
+        $this->assertEquals($event, $event->setError($message));
+        $this->assertSame($messages, $event->getErrors());
+
+        $message     = 'message';
+        $messageVars = ['var' => 'value'];
+        $messages    = [$message => $messageVars];
+        $this->assertEquals($event, $event->setError($message, $messageVars));
+        $this->assertSame($messages, $event->getErrors());
+
+        $message                   = 'message';
+        $messageVars               = ['var' => 'value'];
+        $key                       = 'key';
+        $field                     = 'field';
+        $fieldErrors[$key][$field] = [
+            $message,
+            $messageVars,
+        ];
+        $this->assertEquals($event, $event->setError($message, $messageVars, $key, $field));
+        $this->assertSame($fieldErrors, $event->getFieldErrors());
+    }
+
+    public function testGetFileContent(): void
+    {
+        $config   = [];
+        $paramBag = $this->createStub(ParameterBag::class);
+        $event    = new ConfigEvent($config, $paramBag);
+
+        $fileContent = 'content';
+        $fileHandler = tmpfile();
+        $realPath    = stream_get_meta_data($fileHandler)['uri'];
+        fwrite($fileHandler, ' '.$fileContent);
+
+        $uploadedFile = $this->createMock(UploadedFile::class);
+        $uploadedFile->expects($this->once())
+            ->method('getRealPath')
+            ->willReturn($realPath);
+
+        $this->assertSame($fileContent, $event->getFileContent($uploadedFile));
+        $this->assertFileDoesNotExist($realPath);
+    }
+
+    public function testEncodeFileContents(): void
+    {
+        $config   = [];
+        $paramBag = $this->createStub(ParameterBag::class);
+        $event    = new ConfigEvent($config, $paramBag);
+
+        $string = 'řčžýřžýčř';
+        $result = 'xZnEjcW+w73FmcW+w73EjcWZ';
+        $this->assertSame($result, $event->encodeFileContents($string));
+    }
+
+    public function testNormalizedDataGetSet(): void
+    {
+        $config   = [];
+        $paramBag = $this->createStub(ParameterBag::class);
+        $event    = new ConfigEvent($config, $paramBag);
+
+        $origNormData = ['orig'];
+
+        $event->setOriginalNormData($origNormData);
+        $this->assertSame($origNormData, $event->getOriginalNormData());
+
+        $normData = ['norm'];
+
+        $event->setNormData($normData);
+        $this->assertEquals($normData, $event->getNormData());
+    }
+}

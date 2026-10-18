@@ -1,0 +1,236 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\LeadBundle\Tests\Helper;
+
+use Mautic\CacheBundle\Cache\CacheProviderInterface;
+use Mautic\CoreBundle\Helper\CoreParametersHelper;
+use Mautic\CoreBundle\Test\ReflectionHelper;
+use Mautic\LeadBundle\Helper\SegmentCountCacheHelper;
+use PHPUnit\Framework\Assert;
+use PHPUnit\Framework\MockObject\MockObject;
+use PHPUnit\Framework\TestCase;
+use Symfony\Component\Cache\CacheItem;
+
+final class SegmentCountCacheHelperTest extends TestCase
+{
+    private MockObject&CacheProviderInterface $cacheProviderMock;
+
+    private MockObject&CoreParametersHelper $coreParametersHelperMock;
+
+    private SegmentCountCacheHelper $segmentCountCacheHelper;
+
+    protected function setUp(): void
+    {
+        $this->cacheProviderMock         = $this->createMock(CacheProviderInterface::class);
+        $this->coreParametersHelperMock  = $this->createMock(CoreParametersHelper::class);
+        $this->segmentCountCacheHelper   = new SegmentCountCacheHelper(
+            $this->cacheProviderMock,
+            $this->coreParametersHelperMock
+        );
+    }
+
+    /**
+     * Create a CacheItem instance using reflection since the constructor is private.
+     */
+    private function createCacheItem(string $key, mixed $value = null, bool $isHit = false): CacheItem
+    {
+        $item = (new \ReflectionClass(CacheItem::class))->newInstanceWithoutConstructor();
+
+        ReflectionHelper::setValue($item, 'key', $key);
+        ReflectionHelper::setValue($item, 'value', $value);
+        ReflectionHelper::setValue($item, 'isHit', $isHit);
+
+        return $item;
+    }
+
+    public function testGetSegmentContactCount(): void
+    {
+        $segmentId = 1;
+        $cacheItem = $this->createCacheItem('segment.'.$segmentId.'.lead', 1, true);
+
+        $this->cacheProviderMock
+            ->method('getItem')
+            ->with('segment.'.$segmentId.'.lead')
+            ->willReturn($cacheItem);
+
+        $count = $this->segmentCountCacheHelper->getSegmentContactCount($segmentId);
+        $this->assertSame(1, $count);
+    }
+
+    public function testSetSegmentContactCount(): void
+    {
+        $segmentId = 1;
+        $count     = 2;
+        $cacheItem = $this->createCacheItem('segment.'.$segmentId.'.lead');
+
+        $this->cacheProviderMock
+            ->method('getItem')
+            ->with('segment.'.$segmentId.'.lead')
+            ->willReturn($cacheItem);
+
+        $this->coreParametersHelperMock
+            ->method('get')
+            ->with('segment_api_count_cache_ttl', 43200)
+            ->willReturn(43200);
+
+        $this->cacheProviderMock
+            ->method('hasItem')
+            ->with('segment.'.$segmentId.'.lead.recount')
+            ->willReturn(false);
+
+        $this->cacheProviderMock
+            ->expects($this->never())
+            ->method('deleteItem')
+            ->with('segment.'.$segmentId.'.lead.recount');
+
+        $this->segmentCountCacheHelper->setSegmentContactCount($segmentId, $count);
+    }
+
+    public function testSetSegmentContactCountIfRecountExist(): void
+    {
+        $segmentId = 1;
+        $count     = 2;
+        $cacheItem = $this->createCacheItem('segment.'.$segmentId.'.lead');
+
+        $this->cacheProviderMock
+            ->method('getItem')
+            ->with('segment.'.$segmentId.'.lead')
+            ->willReturn($cacheItem);
+
+        $this->coreParametersHelperMock
+            ->method('get')
+            ->with('segment_api_count_cache_ttl', 43200)
+            ->willReturn(43200);
+
+        $this->cacheProviderMock
+            ->expects($this->exactly(1))
+            ->method('hasItem')
+            ->with('segment.'.$segmentId.'.lead.recount')
+            ->willReturn(true);
+
+        $this->cacheProviderMock
+            ->expects($this->exactly(1))
+            ->method('deleteItem')
+            ->with('segment.'.$segmentId.'.lead.recount')
+            ->willReturn(true);
+
+        $this->segmentCountCacheHelper->setSegmentContactCount($segmentId, $count);
+    }
+
+    public function testSetSegmentContactCountWithInvalidatedSegment(): void
+    {
+        $segmentId = 1;
+        $cacheItem = $this->createCacheItem('segment.'.$segmentId.'.lead.recount');
+
+        $this->cacheProviderMock
+            ->expects($this->once())
+            ->method('getItem')
+            ->with('segment.'.$segmentId.'.lead.recount')
+            ->willReturn($cacheItem);
+
+        $this->cacheProviderMock
+            ->expects($this->once())
+            ->method('save')
+            ->with($cacheItem);
+
+        $this->segmentCountCacheHelper->invalidateSegmentContactCount($segmentId);
+    }
+
+    public function testDecrementSegmentContactCountHasNoCache(): void
+    {
+        $segmentId = 1;
+        $this->cacheProviderMock
+            ->expects($this->exactly(1))
+            ->method('hasItem')
+            ->with('segment.'.$segmentId.'.lead')
+            ->willReturn(false);
+        $this->segmentCountCacheHelper->decrementSegmentContactCount($segmentId);
+    }
+
+    public function testDeleteSegmentContactCountIfNotExist(): void
+    {
+        $segmentId = 1;
+        $this->cacheProviderMock
+            ->expects($this->exactly(1))
+            ->method('hasItem')
+            ->with('segment.'.$segmentId.'.lead')
+            ->willReturn(false);
+        $this->segmentCountCacheHelper->deleteSegmentContactCount($segmentId);
+    }
+
+    public function testDeleteSegmentContactCountIfExist(): void
+    {
+        $segmentId = 1;
+        $this->cacheProviderMock
+            ->expects($this->exactly(1))
+            ->method('hasItem')
+            ->with('segment.'.$segmentId.'.lead')
+            ->willReturn(true);
+
+        $this->cacheProviderMock
+            ->expects($this->exactly(1))
+            ->method('deleteItem')
+            ->with('segment.'.$segmentId.'.lead')
+            ->willReturn(true);
+
+        $this->segmentCountCacheHelper->deleteSegmentContactCount($segmentId);
+    }
+
+    public function testDecrementSegmentContactCount(): void
+    {
+        $segmentId = 1;
+        $cacheItem = $this->createCacheItem('segment.'.$segmentId.'.lead', 5, true);
+
+        $this->cacheProviderMock
+            ->method('hasItem')
+            ->willReturnCallback(fn (string $key): bool => $key === 'segment.'.$segmentId.'.lead');
+
+        $this->cacheProviderMock
+            ->method('getItem')
+            ->willReturnCallback(function ($key) use ($segmentId, $cacheItem): ?\Symfony\Component\Cache\CacheItem {
+                if ($key === 'segment.'.$segmentId.'.lead') {
+                    return $cacheItem;
+                }
+
+                return null;
+            });
+
+        $this->cacheProviderMock
+            ->expects($this->once())
+            ->method('save')
+            ->with($cacheItem);
+
+        $this->segmentCountCacheHelper->decrementSegmentContactCount($segmentId);
+
+        // Verify the count was decremented from 5 to 4
+        $this->assertSame(4, $cacheItem->get());
+    }
+
+    public function testDecrementSegmentCountIsNotNegative(): void
+    {
+        $segmentId = 1;
+        $cacheItem = $this->createCacheItem('segment.'.$segmentId.'.lead', 0, true);
+
+        $this->cacheProviderMock
+            ->expects($this->exactly(2))
+            ->method('hasItem')
+            ->willReturnCallback(fn (string $key): bool => $key === 'segment.'.$segmentId.'.lead');
+        $this->cacheProviderMock
+            ->method('getItem')
+            ->willReturnCallback(function ($key) use ($segmentId, $cacheItem): ?\Symfony\Component\Cache\CacheItem {
+                if (in_array($key, ['segment.'.$segmentId.'.lead', 'segment.'.$segmentId.'.lead.recount'])) {
+                    return $cacheItem;
+                }
+
+                return null;
+            });
+
+        // Edge case. Should not decrement below 0.
+        $this->segmentCountCacheHelper->decrementSegmentContactCount($segmentId);
+
+        // Assert that the cache item value is still 0 (not negative)
+        $this->assertSame(0, $cacheItem->get());
+    }
+}

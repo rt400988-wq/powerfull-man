@@ -1,0 +1,122 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\IntegrationsBundle\Tests\Unit\Auth\Provider\BasicAuth;
+
+use GuzzleHttp\Exception\ConnectException;
+use Mautic\IntegrationsBundle\Auth\Provider\BasicAuth\CredentialsInterface;
+use Mautic\IntegrationsBundle\Auth\Provider\BasicAuth\HttpFactory;
+use Mautic\IntegrationsBundle\Exception\PluginNotConfiguredException;
+use PHPUnit\Framework\TestCase;
+
+final class HttpFactoryTest extends TestCase
+{
+    public function testType(): void
+    {
+        $this->assertSame('basic_auth', (new HttpFactory())->getAuthType());
+    }
+
+    public function testMissingUsernameThrowsException(): void
+    {
+        $this->expectException(PluginNotConfiguredException::class);
+
+        $credentials = new class() implements CredentialsInterface {
+            public function getUsername(): string
+            {
+                return '';
+            }
+
+            public function getPassword(): string
+            {
+                return '123';
+            }
+        };
+
+        (new HttpFactory())->getClient($credentials);
+    }
+
+    public function testMissingPasswordThrowsException(): void
+    {
+        $this->expectException(PluginNotConfiguredException::class);
+
+        $credentials = new class() implements CredentialsInterface {
+            public function getUsername(): string
+            {
+                return '123';
+            }
+
+            public function getPassword(): string
+            {
+                return '';
+            }
+        };
+
+        (new HttpFactory())->getClient($credentials);
+    }
+
+    public function testInstantiatedClientIsReturned(): void
+    {
+        $credentials = new class() implements CredentialsInterface {
+            public function getUsername(): string
+            {
+                return 'foo';
+            }
+
+            public function getPassword(): string
+            {
+                return 'bar';
+            }
+        };
+
+        $factory = new HttpFactory();
+
+        $client1 = $factory->getClient($credentials);
+        $client2 = $factory->getClient($credentials);
+        $this->assertSame($client2, $client1);
+
+        $credentials2 = new class() implements CredentialsInterface {
+            public function getUsername(): string
+            {
+                return 'bar';
+            }
+
+            public function getPassword(): string
+            {
+                return 'foo';
+            }
+        };
+
+        $client3 = $factory->getClient($credentials2);
+        $this->assertNotSame($client3, $client1);
+    }
+
+    public function testHeaderIsSet(): void
+    {
+        $credentials = new class() implements CredentialsInterface {
+            public function getUsername(): string
+            {
+                return 'foo';
+            }
+
+            public function getPassword(): string
+            {
+                return 'bar';
+            }
+        };
+
+        $factory = new HttpFactory();
+
+        $client  = $factory->getClient($credentials);
+
+        try {
+            // Triggering an exception so we can extract the request
+            $client->request('get', 'http://foobar.invalid/test');
+        } catch (ConnectException $exception) {
+            $headers = $exception->getRequest()->getHeaders();
+            $this->assertArrayHasKey('Authorization', $headers);
+
+            $this->assertEquals('Basic '.base64_encode('foo:bar'), $headers['Authorization'][0]);
+        }
+    }
+}

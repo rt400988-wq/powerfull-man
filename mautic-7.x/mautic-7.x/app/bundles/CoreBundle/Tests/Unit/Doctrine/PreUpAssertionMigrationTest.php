@@ -1,0 +1,126 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\CoreBundle\Tests\Unit\Doctrine;
+
+use Doctrine\DBAL\Schema\Schema;
+use Doctrine\Migrations\Exception\SkipMigration;
+use Mautic\CoreBundle\Doctrine\PreUpAssertionMigration;
+use PHPUnit\Framework\TestCase;
+
+final class PreUpAssertionMigrationTest extends TestCase
+{
+    public function testPreUpWithoutSkipAssertions(): void
+    {
+        $migration = new class() extends PreUpAssertionMigration {
+            /**
+             * @var array<string>
+             */
+            public array $messages = [];
+
+            /**
+             * @noinspection PhpMissingParentConstructorInspection
+             */
+            public function __construct()
+            {
+            }
+
+            protected function preUpAssertions(): void
+            {
+            }
+
+            protected function write(string $message): void
+            {
+                $this->messages[] = $message;
+            }
+        };
+
+        $migration->preUp($this->createStub(Schema::class));
+
+        $this->assertEmpty($migration->messages);
+    }
+
+    public function testPreUpSkipped(): void
+    {
+        $migration = new class() extends PreUpAssertionMigration {
+            /**
+             * @var array<string>
+             */
+            public array $messages = [];
+
+            /**
+             * @noinspection PhpMissingParentConstructorInspection
+             */
+            public function __construct()
+            {
+            }
+
+            protected function preUpAssertions(): void
+            {
+                $this->skipAssertion(fn (Schema $schema): true => true, 'First exists');
+
+                $this->skipAssertion(fn (Schema $schema): true => true, 'Second exists');
+
+                $this->skipAssertion(fn (Schema $schema): true => true, 'Third exists');
+            }
+
+            protected function write(string $message): void
+            {
+                $this->messages[] = $message;
+            }
+        };
+
+        try {
+            $migration->preUp($this->createStub(Schema::class));
+            $this->fail(sprintf('Exception %s should have been thrown', SkipMigration::class));
+        } catch (SkipMigration) {
+        }
+
+        $this->assertCount(3, $migration->messages);
+        $this->assertSame([
+            '<comment>First exists</comment>',
+            '<comment>Second exists</comment>',
+            '<comment>Third exists</comment>',
+        ], $migration->messages);
+    }
+
+    public function testPreUpNotSkipped(): void
+    {
+        $migration = new class() extends PreUpAssertionMigration {
+            /**
+             * @var array<string>
+             */
+            public array $messages = [];
+
+            /**
+             * @noinspection PhpMissingParentConstructorInspection
+             */
+            public function __construct()
+            {
+            }
+
+            protected function preUpAssertions(): void
+            {
+                $this->skipAssertion(fn (Schema $schema): true => true, 'First exists');
+
+                $this->skipAssertion(fn (Schema $schema): true => true, 'Second exists');
+
+                $this->skipAssertion(fn (Schema $schema): false => false, 'Third does not exist');
+            }
+
+            protected function write(string $message): void
+            {
+                $this->messages[] = $message;
+            }
+        };
+
+        $migration->preUp($this->createStub(Schema::class));
+
+        $this->assertCount(2, $migration->messages);
+        $this->assertSame([
+            '<comment>First exists</comment>',
+            '<comment>Second exists</comment>',
+        ], $migration->messages);
+    }
+}

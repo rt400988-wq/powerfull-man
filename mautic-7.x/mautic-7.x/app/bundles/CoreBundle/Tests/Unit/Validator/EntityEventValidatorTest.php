@@ -1,0 +1,71 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\CoreBundle\Tests\Unit\Validator;
+
+use Mautic\CoreBundle\Event\EntityValidateEvent;
+use Mautic\CoreBundle\Validator\EntityEvent;
+use Mautic\CoreBundle\Validator\EntityEventValidator;
+use PHPUnit\Framework\TestCase;
+use Symfony\Component\EventDispatcher\EventDispatcher;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use Symfony\Component\Validator\Constraints\NotBlank;
+use Symfony\Component\Validator\ConstraintValidatorInterface;
+use Symfony\Component\Validator\Context\ExecutionContextInterface;
+use Symfony\Component\Validator\Exception\UnexpectedTypeException;
+
+final class EntityEventValidatorTest extends TestCase
+{
+    private EventDispatcherInterface $dispatcher;
+
+    /**
+     * @var \PHPUnit\Framework\MockObject\Stub&ExecutionContextInterface
+     */
+    private \PHPUnit\Framework\MockObject\Stub $context;
+
+    private ConstraintValidatorInterface $validator;
+
+    protected function setUp(): void
+    {
+        $this->context    = $this->createStub(ExecutionContextInterface::class);
+        $this->dispatcher = new EventDispatcher();
+        $this->validator  = new EntityEventValidator($this->dispatcher);
+        $this->validator->initialize($this->context);
+    }
+
+    public function testInvalidValue(): void
+    {
+        $this->expectException(UnexpectedTypeException::class);
+        $this->expectExceptionMessage('Expected argument of type "object", "string" given');
+
+        $this->validator->validate('invalidType', new EntityEvent());
+    }
+
+    public function testInvalidConstraint(): void
+    {
+        $this->expectException(UnexpectedTypeException::class);
+        $this->expectExceptionMessageMatches('/Expected argument of type "Mautic\\\CoreBundle\\\Validator\\\EntityEvent"/');
+
+        $this->validator->validate(new \stdClass(), new NotBlank());
+    }
+
+    public function testEventIsDispatched(): void
+    {
+        $dispatched = false;
+        $entity     = new \stdClass();
+        $constraint = new EntityEvent();
+
+        $this->dispatcher->addListener(EntityValidateEvent::class, function (EntityValidateEvent $event) use (&$dispatched, $entity, $constraint): void {
+            $dispatched = true;
+
+            $this->assertSame($entity, $event->getEntity());
+            $this->assertSame($constraint, $event->getConstraint());
+            $this->assertSame($this->context, $event->getContext());
+        });
+
+        $this->validator->validate($entity, $constraint);
+
+        $this->assertTrue($dispatched);
+    }
+}

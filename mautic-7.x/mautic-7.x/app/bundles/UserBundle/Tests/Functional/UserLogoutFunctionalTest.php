@@ -1,0 +1,47 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\UserBundle\Tests\Functional;
+
+use Mautic\CoreBundle\Test\MauticMysqlTestCase;
+use Mautic\UserBundle\Entity\Role;
+use Mautic\UserBundle\Entity\User;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\PasswordHasher\Hasher\PasswordHasherFactoryInterface;
+use Symfony\Component\PasswordHasher\PasswordHasherInterface;
+
+final class UserLogoutFunctionalTest extends MauticMysqlTestCase
+{
+    public function testLogout(): void
+    {
+        $role = new Role();
+        $role->setName('Role');
+        $role->setIsAdmin(true);
+        $this->em->persist($role);
+
+        $user = new User();
+        $user->setFirstName('John');
+        $user->setLastName('Doe');
+        $user->setUsername('john.doe');
+        $user->setEmail('john.doe@email.com');
+        $user->setRole($role);
+        $hasher = self::getContainer()->get(PasswordHasherFactoryInterface::class)->getPasswordHasher($user);
+        $this->assertInstanceOf(PasswordHasherInterface::class, $hasher);
+        $user->setPassword($hasher->hash('Maut1cR0cks!'));
+        $this->em->persist($user);
+
+        $this->em->flush();
+        $this->em->clear();
+
+        // Login newly created non-admin user
+        $this->loginUser($user);
+        $this->client->setServerParameter('PHP_AUTH_USER', $user->getUserIdentifier());
+        $this->client->setServerParameter('PHP_AUTH_PW', 'Maut1cR0cks!');
+
+        $this->client->request(Request::METHOD_GET, '/s/logout');
+        $clientResponse = $this->client->getResponse();
+        self::assertResponseIsSuccessful();
+        $this->assertStringContainsString('login', (string) $clientResponse->getContent());
+    }
+}

@@ -1,0 +1,78 @@
+package emailverifier
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+)
+
+// updateDisposableDomains gets domains data from source's URL
+func updateDisposableDomains(source string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("get disposable domains from %s with status_code: %d", source, resp.StatusCode)
+	}
+
+	var domains []string
+
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	if len(content) == 0 {
+		return nil
+	}
+
+	if err = json.Unmarshal(content, &domains); err != nil {
+		return err
+	}
+
+	newDomains := make(map[string]struct{})
+	for _, v := range domains {
+		newDomains[v] = struct{}{}
+	}
+
+	// clear up invalid disposable domains
+	disposableSyncDomains.Range(func(key, value interface{}) bool {
+		if _, exists := newDomains[key.(string)]; !exists {
+			disposableSyncDomains.Delete(key)
+		}
+		return true
+	})
+
+	// update new domain data
+	for _, d := range domains {
+		disposableSyncDomains.Store(d, struct{}{})
+	}
+
+	// The generated list has the domains in disposable_allowlist.txt removed
+	// already; take them out of what was just fetched too, or the first
+	// refresh reinstates every one of them.
+	for d := range allowedDisposableDomains {
+		disposableSyncDomains.Delete(d)
+	}
+
+	// add additionalDisposableDomains again -- after the allowlist, so a
+	// caller who explicitly adds one of those domains still gets it back
+	additionalDisposableDomains.Range(func(key, _ interface{}) bool {
+		disposableSyncDomains.Store(key, struct{}{})
+		return true
+	})
+	return nil
+}

@@ -1,0 +1,81 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\CoreBundle\Tests\Unit\Helper\Chart;
+
+use Mautic\CoreBundle\Helper\Chart\ChartQuery;
+use PHPUnit\Framework\MockObject\MockObject;
+use PHPUnit\Framework\TestCase;
+
+final class DateRangeUnitTraitTest extends TestCase
+{
+    private MockObject&ChartQuery $trait;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // Can't test only trait. Need a concrete class.
+        $this->trait = $this->getMockBuilder(ChartQuery::class)
+            ->disableOriginalConstructor()
+            ->onlyMethods([])
+            ->getMock();
+    }
+
+    public function testGetTimeUnitFromDateRangeWithSameDay(): void
+    {
+        $from = new \DateTime('2019-04-01');
+        $to   = new \DateTime('2019-04-01');
+        $this->assertSame('H', $this->trait->getTimeUnitFromDateRange($from, $to));
+    }
+
+    public function testGetTimeUnitFromDateRangeWithLessThanDay(): void
+    {
+        $from = new \DateTime('2019-04-01 00:00:00');
+        $to   = new \DateTime('2019-04-01 04:30:00');
+        $this->assertSame('H', $this->trait->getTimeUnitFromDateRange($from, $to));
+    }
+
+    public function testGetTimeUnitFromDateRangeWithLessThanHour(): void
+    {
+        $from = new \DateTime('2019-04-01 04:00:00');
+        $to   = new \DateTime('2019-04-01 04:30:00');
+        $this->assertSame('i', $this->trait->getTimeUnitFromDateRange($from, $to));
+    }
+
+    public function testGetTimeUnitFromDateRangeWithLessThanMinute(): void
+    {
+        $from = new \DateTime('2019-04-01 04:00:00');
+        $to   = new \DateTime('2019-04-01 04:00:30');
+        $this->assertSame('i', $this->trait->getTimeUnitFromDateRange($from, $to));
+    }
+
+    public function testGetTimeUnitFromDateRangeWithLessThanMonth(): void
+    {
+        $from = new \DateTime('2019-04-01');
+        $to   = new \DateTime('2019-04-30');
+        $this->assertSame('d', $this->trait->getTimeUnitFromDateRange($from, $to));
+    }
+
+    public function testGetTimeUnitFromDateRangeWithLessThan100Days(): void
+    {
+        $from = new \DateTime('2019-04-01');
+        $to   = new \DateTime('2019-05-30');
+        $this->assertSame('W', $this->trait->getTimeUnitFromDateRange($from, $to));
+    }
+
+    public function testGetTimeUnitFromDateRangeWithLessThan1000Days(): void
+    {
+        $from = new \DateTime('2019-04-01');
+        $to   = new \DateTime('2020-05-30');
+        $this->assertSame('m', $this->trait->getTimeUnitFromDateRange($from, $to));
+    }
+
+    public function testGetTimeUnitFromDateRangeWithMoreThan1000Days(): void
+    {
+        $from = new \DateTime('2019-04-01');
+        $to   = new \DateTime('2022-05-30');
+        $this->assertSame('Y', $this->trait->getTimeUnitFromDateRange($from, $to));
+    }
+}

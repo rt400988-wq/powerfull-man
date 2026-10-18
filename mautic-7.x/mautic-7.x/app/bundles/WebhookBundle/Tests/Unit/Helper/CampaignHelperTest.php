@@ -1,0 +1,171 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\WebhookBundle\Tests\Unit\Helper;
+
+use Doctrine\Common\Collections\ArrayCollection;
+use GuzzleHttp\Client;
+use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\RequestOptions;
+use Mautic\CoreBundle\Entity\IpAddress;
+use Mautic\LeadBundle\Entity\Company;
+use Mautic\LeadBundle\Entity\CompanyRepository;
+use Mautic\LeadBundle\Entity\Lead;
+use Mautic\WebhookBundle\Helper\CampaignHelper;
+use PHPUnit\Framework\MockObject\MockObject;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+
+final class CampaignHelperTest extends \PHPUnit\Framework\TestCase
+{
+    /**
+     * @var MockObject&Lead
+     */
+    private MockObject $contact;
+
+    /**
+     * @var MockObject&Client
+     */
+    private MockObject $client;
+
+    private CampaignHelper $campaignHelper;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->contact           = $this->createMock(Lead::class);
+        $this->client            = $this->createMock(Client::class);
+        $ipCollection            = new ArrayCollection();
+        $companyRepository       = $this->getMockBuilder(CompanyRepository::class)
+            ->disableOriginalConstructor()
+            ->onlyMethods(['getCompaniesByLeadId'])
+            ->getMock();
+
+        $companyRepository->method('getCompaniesByLeadId')->willReturn([new Company()]);
+
+        $this->campaignHelper = new CampaignHelper($this->client, $this->createStub(EventDispatcherInterface::class), $companyRepository);
+
+        $ipCollection->add((new IpAddress())->setIpAddress('127.0.0.1'));
+        $ipCollection->add((new IpAddress())->setIpAddress('127.0.0.2'));
+
+        $this->contact->expects($this->once())
+            ->method('getProfileFields')
+            ->willReturn(['email' => 'john@doe.email', 'company' => 'Mautic']);
+
+        $this->contact->expects($this->once())
+            ->method('getIpAddresses')
+            ->willReturn($ipCollection);
+    }
+
+    public function testFireWebhookWithGet(): void
+    {
+        $expectedUrl = 'https://mautic.org?test=tee&email=john%40doe.email&IP=127.0.0.1%2C127.0.0.2';
+
+        $this->client->expects($this->once())
+            ->method('get')
+            ->with($expectedUrl, [
+                RequestOptions::HEADERS => ['test' => 'tee', 'company' => 'Mautic'],
+                RequestOptions::TIMEOUT => 10,
+            ])
+            ->willReturn(new Response(200));
+
+        $this->campaignHelper->fireWebhook($this->provideSampleConfig(), $this->contact);
+    }
+
+    public function testFireWebhookWithPost(): void
+    {
+        $config = $this->provideSampleConfig('post');
+
+        $this->client->expects($this->once())
+            ->method('request')
+            ->with('post', 'https://mautic.org', [
+                RequestOptions::FORM_PARAMS => ['test'  => 'tee', 'email' => 'john@doe.email', 'IP' => '127.0.0.1,127.0.0.2'],
+                RequestOptions::HEADERS     => ['test' => 'tee', 'company' => 'Mautic'],
+                RequestOptions::TIMEOUT     => 10,
+            ])
+            ->willReturn(new Response(200));
+
+        $this->campaignHelper->fireWebhook($config, $this->contact);
+    }
+
+    public function testFireWebhookWithPostJson(): void
+    {
+        $config = $this->provideSampleConfig('post', 'application/json');
+        $this->client->expects($this->once())
+            ->method('request')
+            ->with('post', 'https://mautic.org', [
+                RequestOptions::HEADERS => [
+                    'test'         => 'tee',
+                    'company'      => 'Mautic',
+                    'content-type' => 'application/json',
+                ],
+                RequestOptions::TIMEOUT => 10,
+                RequestOptions::BODY    => json_encode(
+                    ['test' => 'tee', 'email' => 'john@doe.email', 'IP' => '127.0.0.1,127.0.0.2']
+                ),
+            ])
+            ->willReturn(new Response(200));
+
+        $this->campaignHelper->fireWebhook($config, $this->contact);
+    }
+
+    public function testFireWebhookWhenReturningNotFound(): void
+    {
+        $this->client->expects($this->once())
+            ->method('get')
+            ->willReturn(new Response(404));
+
+        $this->expectException(\OutOfRangeException::class);
+
+        $this->campaignHelper->fireWebhook($this->provideSampleConfig(), $this->contact);
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function provideSampleConfig(string $method = 'get', string $type = 'application/x-www-form-urlencoded'): array
+    {
+        $sample = [
+            'url'             => 'https://mautic.org',
+            'method'          => $method,
+            'timeout'         => 10,
+            'additional_data' => [
+                'list' => [
+                    [
+                        'label' => 'test',
+                        'value' => 'tee',
+                    ],
+                    [
+                        'label' => 'email',
+                        'value' => '{contactfield=email}',
+                    ],
+                    [
+                        'label' => 'IP',
+                        'value' => '{contactfield=ipAddress}',
+                    ],
+                ],
+            ],
+            'headers' => [
+                'list' => [
+                    [
+                        'label' => 'test',
+                        'value' => 'tee',
+                    ],
+                    [
+                        'label' => 'company',
+                        'value' => '{contactfield=company}',
+                    ],
+                ],
+            ],
+        ];
+        if ('application/json' === $type) {
+            $sample['headers']['list'][] = [
+                'label' => 'content-type',
+                'value' => 'application/json',
+            ];
+        }
+
+        return $sample;
+    }
+}

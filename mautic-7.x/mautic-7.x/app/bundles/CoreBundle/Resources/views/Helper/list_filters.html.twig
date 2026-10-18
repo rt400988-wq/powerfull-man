@@ -1,0 +1,53 @@
+{% macro renderOption(value, label, selectedValues, prefix, translateLabels) %}
+    {% if label is iterable %}
+        {% set optionValue = label.value|default(label.alias|default(label.id)) %}
+        {% set label = label.label|default(label.title|default(label.alias|default(''))) %}
+    {% else %}
+        {% set optionValue = value %}
+        {% set label = label %}
+    {% endif %}
+
+    {% set selected = (selectedValues is defined and optionValue in selectedValues) ? ' selected' : '' %}
+
+    {% if prefix is defined %}
+        {% set optionValue = prefix ~ ':' ~ optionValue %}
+    {% endif %}
+
+    <option value="{{ optionValue|escape('html_attr') }}"{{ selected }}>
+        {% if translateLabels is defined and translateLabels is not empty %}
+            {{ label|trans }}
+        {% else %}
+            {{ label|purify }}
+        {% endif %}
+    </option>
+{% endmacro %}
+
+{% if filters is defined and filters is not empty %}
+    <div class="form-group">
+        {% for filterName, filter in filters %}
+        {% set attr = getFilterAttributes(
+            filterName|trans,
+            filter,
+            target|default('.page-list'),
+            tmpl|default('list')
+        ) %}
+        <select {{ attr|join(' ')|raw }}>
+        {% if filter.groups is defined %}
+            {% for groupLabel, groupFilter in filter.groups %}
+                <optgroup label="{{ groupLabel|trans }}"{% if groupFilter.prefix is defined %} data-prefix="{{ groupFilter.prefix }}"{% endif %}>
+                    {% if groupFilter.options is defined %}
+                    {% for value, label in groupFilter.options %}
+                        {{ _self.renderOption(value, label, groupFilter.values|default([]), groupFilter.prefix|default(null), null) }}
+                    {% endfor %}
+                    {% endif %}
+                </optgroup>
+            {% endfor %}
+        {% elseif filter.options is defined %}
+            {% for value, label in filter.options %}
+                {{ _self.renderOption(value, label, filter.values|default([]), null, filter.translateLabels|default(null)) }}
+            {% endfor %}
+        {% endif %}
+        </select>
+        {% endfor %}
+    </div>
+{% endif %}

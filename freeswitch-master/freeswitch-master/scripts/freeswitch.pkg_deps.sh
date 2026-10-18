@@ -1,0 +1,20 @@
+#!/bin/sh
+
+wget -c http://svn.freeswitch.org/downloads/libs/flite-1.3.99-latest.tar.gz
+wget -c http://svn.freeswitch.org/downloads/libs/lame-3.97.tar.gz
+wget -c http://svn.freeswitch.org/downloads/libs/libshout-2.2.2.tar.gz
+wget -c http://svn.freeswitch.org/downloads/libs/mpg123.tar.gz
+wget -c http://svn.freeswitch.org/downloads/libs/openldap-2.4.11.tar.gz
+wget -c http://svn.freeswitch.org/downloads/libs/pocketsphinx-0.5.99-latest.tar.gz
+wget -c http://svn.freeswitch.org/downloads/libs/sphinxbase-0.4.99-latest.tar.gz
+wget -c https://github.com/freeswitch/freeswitch-sounds/releases/download/music-1.0.52/freeswitch-sounds-music-8000-1.0.52.tar.gz
+wget -c https://github.com/freeswitch/freeswitch-sounds/releases/download/music-1.0.52/freeswitch-sounds-music-16000-1.0.52.tar.gz
+wget -c https://github.com/freeswitch/freeswitch-sounds/releases/download/music-1.0.52/freeswitch-sounds-music-32000-1.0.52.tar.gz
+wget -c https://github.com/freeswitch/freeswitch-sounds/releases/download/music-1.0.52/freeswitch-sounds-music-48000-1.0.52.tar.gz
+wget -c https://github.com/freeswitch/freeswitch-sounds/releases/download/en-us-callie-1.0.53/freeswitch-sounds-en-us-callie-8000-1.0.53.tar.gz
+wget -c https://github.com/freeswitch/freeswitch-sounds/releases/download/en-us-callie-1.0.53/freeswitch-sounds-en-us-callie-16000-1.0.53.tar.gz
+wget -c https://github.com/freeswitch/freeswitch-sounds/releases/download/en-us-callie-1.0.53/freeswitch-sounds-en-us-callie-32000-1.0.53.tar.gz
+wget -c https://github.com/freeswitch/freeswitch-sounds/releases/download/en-us-callie-1.0.53/freeswitch-sounds-en-us-callie-48000-1.0.53.tar.gz
+wget -c https://github.com/freeswitch/windows-deps/releases/download/communicator_semi_6000_20080321/communicator_semi_6000_20080321.tar.gz
+
+

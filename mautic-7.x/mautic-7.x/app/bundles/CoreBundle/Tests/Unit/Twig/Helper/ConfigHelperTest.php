@@ -1,0 +1,45 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\CoreBundle\Tests\Unit\Twig\Helper;
+
+use Mautic\CoreBundle\Helper\CoreParametersHelper;
+use Mautic\CoreBundle\Twig\Helper\ConfigHelper;
+use PHPUnit\Framework\Assert;
+
+final class ConfigHelperTest extends \PHPUnit\Framework\TestCase
+{
+    public function testGet(): void
+    {
+        $coreParametersHelper = new class() extends CoreParametersHelper {
+            public function __construct()
+            {
+            }
+
+            public function get($name, $default = null): string
+            {
+                Assert::assertEquals('param_a', $name);
+
+                return 'value A';
+            }
+        };
+
+        $helper = new ConfigHelper($coreParametersHelper);
+
+        $this->assertEquals('value A', $helper->get('param_a'));
+    }
+
+    public function testGetName(): void
+    {
+        $coreParametersHelper = new class() extends CoreParametersHelper {
+            public function __construct()
+            {
+            }
+        };
+
+        $helper = new ConfigHelper($coreParametersHelper);
+
+        $this->assertSame('config', $helper->getName());
+    }
+}

@@ -1,0 +1,296 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\PluginBundle\Tests\Form\Type;
+
+use Mautic\PluginBundle\Entity\Integration;
+use Mautic\PluginBundle\Entity\Plugin;
+use Mautic\PluginBundle\Form\Type\IntegrationCampaignsType;
+use Mautic\PluginBundle\Form\Type\IntegrationConfigType;
+use Mautic\PluginBundle\Form\Type\IntegrationsListType;
+use Mautic\PluginBundle\Helper\IntegrationHelper;
+use Mautic\PluginBundle\Integration\AbstractIntegration;
+use PHPUnit\Framework\MockObject\MockObject;
+use PHPUnit\Framework\TestCase;
+use Symfony\Component\Form\Extension\Core\Type\ChoiceType;
+use Symfony\Component\Form\FormBuilderInterface;
+use Symfony\Component\Form\FormEvent;
+use Symfony\Component\Form\FormEvents;
+use Symfony\Component\Form\FormInterface;
+
+final class IntegrationsListTypeTest extends TestCase
+{
+    public function testDataDoesNotHaveIntegration(): void
+    {
+        $pluginName = 'plugin name';
+
+        $integration1 = $this->createMock(Integration::class);
+        $integration1->expects($this->once())
+            ->method('isPublished')
+            ->willReturn(false);
+        $integration1->expects($this->never())
+            ->method('getPlugin');
+
+        $plugin = $this->createMock(Plugin::class);
+        $plugin->expects($this->once())
+            ->method('getName')
+            ->willReturn($pluginName);
+
+        $integration2 = $this->createMock(Integration::class);
+        $integration2->expects($this->once())
+            ->method('isPublished')
+            ->willReturn(true);
+        $integration2->expects($this->once())
+            ->method('getPlugin')
+            ->willReturn($plugin);
+
+        /** @phpstan-ignore classConstant.deprecatedClass */
+        $integrationInstance1 = $this->createMock(AbstractIntegration::class);
+        $integrationInstance1->expects($this->once())
+            ->method('getIntegrationSettings')
+            ->willReturn($integration1);
+
+        /** @phpstan-ignore classConstant.deprecatedClass */
+        $integrationInstance2 = $this->createMock(AbstractIntegration::class);
+        $integrationInstance2->expects($this->once())
+            ->method('getIntegrationSettings')
+            ->willReturn($integration2);
+        $integrationInstance2->expects($this->once())
+            ->method('getDisplayName')
+            ->willReturn('Integration 2');
+        $integrationInstance2->expects($this->once())
+            ->method('getName')
+            ->willReturn('integration-2');
+
+        $integrationHelper = $this->createMock(IntegrationHelper::class);
+        $integrationHelper->expects($this->once())
+            ->method('getIntegrationObjects')
+            ->with(null, 'features', true)
+            ->willReturn(['integration1' => $integrationInstance1, 'integration2' => $integrationInstance2]);
+        $integrationHelper->method('getIntegrationObject')
+            ->willReturn(
+                /** @phpstan-ignore classConstant.deprecatedClass */
+                $this->createStub(AbstractIntegration::class)
+            );
+
+        $callsForm = 0;
+
+        /** @var MockObject&FormInterface $form */
+        $form = $this->createMock(FormInterface::class);
+
+        $form->method('add')
+            ->willReturnCallback(static function (string $key, string $fieldFQCN, array $options) use (&$callsForm, $form): FormInterface {
+                if ('config' === $key) {
+                    ++$callsForm;
+                    self::assertSame(IntegrationConfigType::class, $fieldFQCN);
+                    self::assertArrayHasKey('integration', $options);
+                    self::assertNull($options['integration']);
+                    self::assertArrayHasKey('data', $options);
+                    self::assertSame([], $options['data']);
+                }
+
+                if ('campaign_member_status' === $key) {
+                    ++$callsForm;
+                    self::assertSame(IntegrationCampaignsType::class, $fieldFQCN);
+                    self::assertArrayHasKey('attr', $options);
+                    self::assertSame('integration-campaigns-status hide', $options['attr']['class']);
+                    self::assertArrayHasKey('data', $options);
+                    self::assertSame([], $options['data']);
+                }
+
+                return $form;
+            });
+
+        $data = [];
+
+        $formEvent = $this->createMock(FormEvent::class);
+        $formEvent->expects($this->once())
+            ->method('getForm')
+            ->willReturn($form);
+        $formEvent->expects($this->once())
+            ->method('getData')
+            ->willReturn($data);
+
+        /** @var MockObject&FormBuilderInterface $builder */
+        $builder = $this->createMock(FormBuilderInterface::class);
+
+        $callsBuilder = 0;
+        $builder->method('add')
+            ->willReturnCallback(static function (string $key, string $fieldFQCN, array $options) use ($pluginName, &$callsBuilder, $builder): FormBuilderInterface {
+                if ('integration' === $key) {
+                    ++$callsBuilder;
+                    self::assertSame(ChoiceType::class, $fieldFQCN);
+                    self::assertArrayHasKey('choices', $options);
+                    self::assertSame([
+                        ''          => '',
+                        $pluginName => [
+                            'Integration 2' => 'integration-2',
+                        ],
+                    ], $options['choices']);
+                }
+
+                return $builder;
+            });
+
+        $calledCallback = false;
+        $builder->expects($this->exactly(2))
+            ->method('addEventListener')
+            ->willReturnCallback(static function (string $eventName, callable $callback) use ($formEvent, &$calledCallback, $builder): FormBuilderInterface {
+                self::assertContains($eventName, [FormEvents::PRE_SET_DATA, FormEvents::PRE_SUBMIT]);
+
+                if (!$calledCallback) {
+                    $calledCallback = true;
+                    $callback($formEvent);
+                }
+
+                return $builder;
+            });
+
+        $integrationsListType = new IntegrationsListType($integrationHelper);
+        $integrationsListType->buildForm($builder, ['supported_features' => 'features']);
+
+        $this->assertSame(1, $callsBuilder);
+        $this->assertSame(2, $callsForm);
+    }
+
+    public function testDataHaveIntegration(): void
+    {
+        $pluginName = 'plugin name';
+
+        $integration1 = $this->createMock(Integration::class);
+        $integration1->expects($this->once())
+            ->method('isPublished')
+            ->willReturn(false);
+        $integration1->expects($this->never())
+            ->method('getPlugin');
+
+        $plugin = $this->createMock(Plugin::class);
+        $plugin->expects($this->once())
+            ->method('getName')
+            ->willReturn($pluginName);
+
+        $integration2 = $this->createMock(Integration::class);
+        $integration2->expects($this->once())
+            ->method('isPublished')
+            ->willReturn(true);
+        $integration2->expects($this->once())
+            ->method('getPlugin')
+            ->willReturn($plugin);
+
+        /** @phpstan-ignore classConstant.deprecatedClass */
+        $integrationInstance1 = $this->createMock(AbstractIntegration::class);
+        $integrationInstance1->expects($this->once())
+            ->method('getIntegrationSettings')
+            ->willReturn($integration1);
+
+        /** @phpstan-ignore classConstant.deprecatedClass */
+        $integrationInstance2 = $this->createMock(AbstractIntegration::class);
+        $integrationInstance2->expects($this->once())
+            ->method('getIntegrationSettings')
+            ->willReturn($integration2);
+        $integrationInstance2->expects($this->once())
+            ->method('getDisplayName')
+            ->willReturn('Integration 2');
+        $integrationInstance2->expects($this->once())
+            ->method('getName')
+            ->willReturn('integration-2');
+
+        $integrationHelper = $this->createMock(IntegrationHelper::class);
+        $integrationHelper->expects($this->once())
+            ->method('getIntegrationObjects')
+            ->with(null, 'features', true)
+            ->willReturn(['integration1' => $integrationInstance1, 'integration2' => $integrationInstance2]);
+        $integrationHelper->method('getIntegrationObject')
+            ->willReturn(
+                /** @phpstan-ignore classConstant.deprecatedClass */
+                $this->createStub(AbstractIntegration::class)
+            );
+
+        $callsForm = 0;
+        $form      = $this->createMock(FormInterface::class);
+        $form->method('add')
+            ->willReturnCallback(static function (string $key, string $fieldFQCN, array $options) use ($integrationInstance1, &$callsForm, $form): FormInterface {
+                if ('config' === $key) {
+                    ++$callsForm;
+                    self::assertSame(IntegrationConfigType::class, $fieldFQCN);
+                    self::assertArrayHasKey('integration', $options);
+                    self::assertSame($integrationInstance1, $options['integration']);
+                    self::assertArrayHasKey('data', $options);
+                    self::assertSame(['config' => 'test'], $options['data']);
+                }
+
+                if ('campaign_member_status' === $key) {
+                    ++$callsForm;
+                    self::assertSame(IntegrationCampaignsType::class, $fieldFQCN);
+                    self::assertArrayHasKey('attr', $options);
+                    self::assertSame('integration-campaigns-status', $options['attr']['class']);
+                    self::assertArrayHasKey('data', $options);
+                    self::assertSame([
+                        'campaign_member_status' => true,
+                        'some'                   => 'other',
+                    ], $options['data']);
+                }
+
+                return $form;
+            });
+
+        $data = [
+            'integration' => 'integration1',
+            'config'      => [
+                'config' => 'test',
+            ],
+            'campaign_member_status' => [
+                'campaign_member_status' => true,
+                'some'                   => 'other',
+            ],
+        ];
+
+        $formEvent = $this->createMock(FormEvent::class);
+        $formEvent->expects($this->exactly(2))
+            ->method('getForm')
+            ->willReturn($form);
+        $formEvent->expects($this->exactly(2))
+            ->method('getData')
+            ->willReturn($data);
+
+        $callsBuilder = 0;
+        $builder      = $this->createMock(FormBuilderInterface::class);
+        $this->assertInstanceOf(FormBuilderInterface::class, $builder);
+        $builder->method('add')
+            ->willReturnCallback(static function (string $key, string $fieldFQCN, array $options) use ($pluginName, &$callsBuilder, $builder): FormBuilderInterface {
+                if ('integration' === $key) {
+                    ++$callsBuilder;
+                    self::assertSame(ChoiceType::class, $fieldFQCN);
+                    self::assertArrayHasKey('choices', $options);
+                    self::assertSame([
+                        ''          => '',
+                        $pluginName => [
+                            'Integration 2' => 'integration-2',
+                        ],
+                    ], $options['choices']);
+                }
+
+                return $builder;
+            });
+
+        $calledCallback = 0;
+        $builder->expects($this->exactly(2))
+            ->method('addEventListener')
+            ->willReturnCallback(static function (string $eventName, callable $callback) use ($formEvent, &$calledCallback, $builder): FormBuilderInterface {
+                self::assertContains($eventName, [FormEvents::PRE_SET_DATA, FormEvents::PRE_SUBMIT]);
+
+                ++$calledCallback;
+                $callback($formEvent);
+
+                return $builder;
+            });
+
+        $integrationsListType = new IntegrationsListType($integrationHelper);
+        $integrationsListType->buildForm($builder, ['supported_features' => 'features']);
+
+        $this->assertSame(1, $callsBuilder);
+        $this->assertSame(4, $callsForm, 'Because callback is called twice due to coverage.');
+        $this->assertSame(2, $calledCallback);
+    }
+}

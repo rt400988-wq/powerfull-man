@@ -1,0 +1,383 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\IntegrationsBundle\Tests\Unit\Auth\Provider\Oauth2ThreeLegged;
+
+use GuzzleHttp\ClientInterface;
+use kamermans\OAuth2\OAuth2Middleware;
+use kamermans\OAuth2\Persistence\TokenPersistenceInterface as KamermansTokenPersistenceInterface;
+use kamermans\OAuth2\Signer\AccessToken\SignerInterface as AccessTokenSigner;
+use kamermans\OAuth2\Signer\ClientCredentials\SignerInterface;
+use Mautic\IntegrationsBundle\Auth\Provider\Oauth2ThreeLegged\Credentials\CodeInterface;
+use Mautic\IntegrationsBundle\Auth\Provider\Oauth2ThreeLegged\Credentials\CredentialsInterface;
+use Mautic\IntegrationsBundle\Auth\Provider\Oauth2ThreeLegged\Credentials\RedirectUriInterface;
+use Mautic\IntegrationsBundle\Auth\Provider\Oauth2ThreeLegged\Credentials\ScopeInterface;
+use Mautic\IntegrationsBundle\Auth\Provider\Oauth2ThreeLegged\HttpFactory;
+use Mautic\IntegrationsBundle\Auth\Support\Oauth2\ConfigAccess\ConfigCredentialsSignerInterface;
+use Mautic\IntegrationsBundle\Auth\Support\Oauth2\ConfigAccess\ConfigTokenPersistenceInterface;
+use Mautic\IntegrationsBundle\Auth\Support\Oauth2\ConfigAccess\ConfigTokenSignerInterface;
+use Mautic\IntegrationsBundle\Exception\PluginNotConfiguredException;
+use PHPUnit\Framework\TestCase;
+
+final class HttpFactoryTest extends TestCase
+{
+    public function testType(): void
+    {
+        $this->assertSame('oauth2_three_legged', (new HttpFactory())->getAuthType());
+    }
+
+    public function testMissingAuthorizationUrlThrowsException(): void
+    {
+        $this->expectException(PluginNotConfiguredException::class);
+
+        $credentials = new class() implements CredentialsInterface {
+            public function getAuthorizationUrl(): string
+            {
+                return '';
+            }
+
+            public function getTokenUrl(): string
+            {
+                return '';
+            }
+
+            public function getClientId(): string
+            {
+                return '';
+            }
+
+            public function getClientSecret(): string
+            {
+                return '';
+            }
+        };
+
+        (new HttpFactory())->getClient($credentials);
+    }
+
+    public function testMissingTokenUrlThrowsException(): void
+    {
+        $this->expectException(PluginNotConfiguredException::class);
+
+        $credentials = new class() implements CredentialsInterface {
+            public function getAuthorizationUrl(): string
+            {
+                return 'http://auth.url';
+            }
+
+            public function getTokenUrl(): string
+            {
+                return '';
+            }
+
+            public function getClientId(): string
+            {
+                return '';
+            }
+
+            public function getClientSecret(): string
+            {
+                return '';
+            }
+        };
+
+        (new HttpFactory())->getClient($credentials);
+    }
+
+    public function testBaseURISetOnBaseUriAwareCredentials(): void
+    {
+        $credentials = new class() implements CredentialsInterface {
+            public function getAuthorizationUrl(): string
+            {
+                return 'http://auth.url';
+            }
+
+            public function getTokenUrl(): string
+            {
+                return 'http://token.url';
+            }
+
+            public function getClientId(): string
+            {
+                return 'bar';
+            }
+
+            public function getClientSecret(): string
+            {
+                return 'foo';
+            }
+
+            public function getCode(): string
+            {
+                return 'auth_code';
+            }
+
+            public function getRedirectUri(): string
+            {
+                return 'http://redirect.url';
+            }
+
+            public function getScope(): string
+            {
+                return 'scope';
+            }
+
+            public function getBaseUri(): string
+            {
+                return 'https://mautic.com';
+            }
+        };
+
+        $client = (new HttpFactory())->getClient($credentials);
+        /**
+         * Even though the method getConfig is deprecated it won't get deprecated
+         * https://github.com/guzzle/guzzle/issues/3114#issuecomment-1627228395.
+         */
+        /** @phpstan-ignore-next-line */
+        $this->assertSame('https://mautic.com', (string) $client->getConfig('base_uri'));
+    }
+
+    public function testMissingClientIdThrowsException(): void
+    {
+        $this->expectException(PluginNotConfiguredException::class);
+
+        $credentials = new class() implements CredentialsInterface {
+            public function getAuthorizationUrl(): string
+            {
+                return 'http://auth.url';
+            }
+
+            public function getTokenUrl(): string
+            {
+                return 'http://token.url';
+            }
+
+            public function getClientId(): string
+            {
+                return '';
+            }
+
+            public function getClientSecret(): string
+            {
+                return '';
+            }
+        };
+
+        (new HttpFactory())->getClient($credentials);
+    }
+
+    public function testMissingClientSecretThrowsException(): void
+    {
+        $this->expectException(PluginNotConfiguredException::class);
+
+        $credentials = new class() implements CredentialsInterface {
+            public function getAuthorizationUrl(): string
+            {
+                return 'http://auth.url';
+            }
+
+            public function getTokenUrl(): string
+            {
+                return 'http://token.url';
+            }
+
+            public function getClientId(): string
+            {
+                return 'foo';
+            }
+
+            public function getClientSecret(): string
+            {
+                return '';
+            }
+        };
+
+        (new HttpFactory())->getClient($credentials);
+    }
+
+    public function testInstantiatedClientIsReturned(): void
+    {
+        $credentials = new class() implements CredentialsInterface {
+            public function getAuthorizationUrl(): string
+            {
+                return 'http://auth.url';
+            }
+
+            public function getTokenUrl(): string
+            {
+                return 'http://token.url';
+            }
+
+            public function getClientId(): string
+            {
+                return 'foo';
+            }
+
+            public function getClientSecret(): string
+            {
+                return 'bar';
+            }
+        };
+
+        $factory = new HttpFactory();
+
+        $client1 = $factory->getClient($credentials);
+        $client2 = $factory->getClient($credentials);
+        $this->assertSame($client2, $client1);
+
+        $credentials2 = new class() implements CredentialsInterface {
+            public function getAuthorizationUrl(): string
+            {
+                return 'http://auth.url';
+            }
+
+            public function getTokenUrl(): string
+            {
+                return 'http://token.url';
+            }
+
+            public function getClientId(): string
+            {
+                return 'bar';
+            }
+
+            public function getClientSecret(): string
+            {
+                return 'foo';
+            }
+        };
+
+        $client3 = $factory->getClient($credentials2);
+        $this->assertNotSame($client3, $client1);
+    }
+
+    public function testReAuthClientConfiguration(): void
+    {
+        $credentials = $this->getCredentials();
+
+        $client = (new HttpFactory())->getClient($credentials);
+
+        $middleware = $this->extractMiddleware($client);
+
+        $reflectedMiddleware = new \ReflectionClass($middleware);
+        $grantType           = $this->getProperty($reflectedMiddleware, $middleware, 'grantType');
+
+        $reflectedGrantType = new \ReflectionClass($grantType);
+        $reauthConfig       = $this->getProperty($reflectedGrantType, $grantType, 'config');
+
+        $expectedConfig = [
+            'client_id'     => $credentials->getClientId(),
+            'client_secret' => $credentials->getClientSecret(),
+            'code'          => $credentials->getCode(),
+            'redirect_uri'  => $credentials->getRedirectUri(),
+            'scope'         => $credentials->getScope(),
+        ];
+
+        $this->assertEquals($expectedConfig, $reauthConfig->toArray());
+    }
+
+    public function testClientConfiguration(): void
+    {
+        $credentials               = $this->getCredentials();
+        $signerInterface           = $this->createStub(SignerInterface::class);
+        $kamermansTokenPersistence = $this->createStub(KamermansTokenPersistenceInterface::class);
+        $accessTokenSigner         = $this->createStub(AccessTokenSigner::class);
+
+        $clientCredentialSigner = $this->createMock(ConfigCredentialsSignerInterface::class);
+        $clientCredentialSigner->expects($this->once())
+            ->method('getCredentialsSigner')
+            ->willReturn($signerInterface);
+
+        $client              = (new HttpFactory())->getClient($credentials, $clientCredentialSigner);
+        $middleware          = $this->extractMiddleware($client);
+        $reflectedMiddleware = new \ReflectionClass($middleware);
+        $this->assertSame($signerInterface, $this->getProperty($reflectedMiddleware, $middleware, 'clientCredentialsSigner'));
+
+        $tokenPersistence = $this->createMock(ConfigTokenPersistenceInterface::class);
+        $tokenPersistence->expects($this->once())
+            ->method('getTokenPersistence')
+            ->willReturn($kamermansTokenPersistence);
+
+        $client              = (new HttpFactory())->getClient($credentials, $tokenPersistence);
+        $middleware          = $this->extractMiddleware($client);
+        $reflectedMiddleware = new \ReflectionClass($middleware);
+        $this->assertSame($kamermansTokenPersistence, $this->getProperty($reflectedMiddleware, $middleware, 'tokenPersistence'));
+
+        $tokenPersistence = $this->createMock(ConfigTokenSignerInterface::class);
+        $tokenPersistence->expects($this->once())
+            ->method('getTokenSigner')
+            ->willReturn($accessTokenSigner);
+
+        $client              = (new HttpFactory())->getClient($credentials, $tokenPersistence);
+        $middleware          = $this->extractMiddleware($client);
+        $reflectedMiddleware = new \ReflectionClass($middleware);
+        $this->assertSame($accessTokenSigner, $this->getProperty($reflectedMiddleware, $middleware, 'accessTokenSigner'));
+    }
+
+    /**
+     * @throws \ReflectionException
+     */
+    private function extractMiddleware(ClientInterface $client): OAuth2Middleware
+    {
+        /** @phpstan-ignore-next-line */
+        $handler = $client->getConfig()['handler'];
+
+        $reflection = new \ReflectionClass($handler);
+        $property   = $reflection->getProperty('stack');
+
+        $stack = $property->getValue($handler);
+
+        /** @var OAuth2Middleware $oauthMiddleware */
+        $oauthMiddleware = array_pop($stack);
+
+        return $oauthMiddleware[0];
+    }
+
+    private function getProperty(\ReflectionClass $reflection, object $object, string $name): mixed
+    {
+        $property = $reflection->getProperty($name);
+
+        return $property->getValue($object);
+    }
+
+    private function getCredentials(): CredentialsInterface&CodeInterface&RedirectUriInterface&ScopeInterface
+    {
+        return new class() implements CredentialsInterface, CodeInterface, RedirectUriInterface, ScopeInterface {
+            public function getAuthorizationUrl(): string
+            {
+                return 'http://auth.url';
+            }
+
+            public function getTokenUrl(): string
+            {
+                return 'http://token.url';
+            }
+
+            public function getClientId(): string
+            {
+                return 'bar';
+            }
+
+            public function getClientSecret(): string
+            {
+                return 'foo';
+            }
+
+            public function getCode(): string
+            {
+                return 'auth_code';
+            }
+
+            public function getRedirectUri(): string
+            {
+                return 'http://redirect.url';
+            }
+
+            public function getScope(): string
+            {
+                return 'scope';
+            }
+        };
+    }
+}

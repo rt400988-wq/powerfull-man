@@ -1,0 +1,7 @@
+# Local staging files downloaded from Google Drive
+_drive_sources/
+
+# Common local/build artifacts
+__pycache__/
+*.pyc
+node_modules/

@@ -1,0 +1,525 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\LeadBundle\Tests\EventListener;
+
+use Doctrine\Common\Collections\ArrayCollection;
+use Mautic\CampaignBundle\Entity\Event;
+use Mautic\CampaignBundle\Entity\LeadEventLog;
+use Mautic\CampaignBundle\Event\CampaignExecutionEvent;
+use Mautic\CampaignBundle\Event\PendingEvent;
+use Mautic\CampaignBundle\EventCollector\Accessor\Event\ActionAccessor;
+use Mautic\CampaignBundle\Model\CampaignModel;
+use Mautic\CoreBundle\Helper\CoreParametersHelper;
+use Mautic\CoreBundle\Helper\IpLookupHelper;
+use Mautic\LeadBundle\Entity\Company;
+use Mautic\LeadBundle\Entity\CompanyLeadRepository;
+use Mautic\LeadBundle\Entity\Lead;
+use Mautic\LeadBundle\Entity\LeadFieldRepository;
+use Mautic\LeadBundle\Entity\LeadListRepository;
+use Mautic\LeadBundle\Entity\LeadRepository;
+use Mautic\LeadBundle\EventListener\CampaignSubscriber;
+use Mautic\LeadBundle\Model\CompanyModel;
+use Mautic\LeadBundle\Model\DoNotContact;
+use Mautic\LeadBundle\Model\FieldModel;
+use Mautic\LeadBundle\Model\LeadModel;
+use Mautic\LeadBundle\Provider\FilterOperatorProvider;
+use Mautic\PointBundle\Model\PointGroupModel;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\MockObject\MockObject;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use Symfony\Contracts\Translation\TranslatorInterface;
+
+final class CampaignSubscriberTest extends \PHPUnit\Framework\TestCase
+{
+    /**
+     * @var array<string, mixed>
+     */
+    private array $configFrom = [
+        'id'          => 111,
+        'companyname' => 'Mautic',
+        'companemail' => 'mautic@mautic.com',
+    ];
+
+    /**
+     * @var array<string, string>
+     */
+    private array $configTo = [
+        'id'          => '112',
+        'companyname' => 'Mautic2',
+        'companemail' => 'mautic@mauticsecond.com',
+    ];
+
+    /**
+     * @return \Iterator<int, array<string, (array<int, string>|bool|int|null)>>
+     */
+    public static function provideFormDNC(): \Iterator
+    {
+        yield [
+            'reason'   => 1,
+            'channels' => ['email'],
+            'expected' => true,
+            'dncLead'  => 1,
+        ];
+        yield [
+            'reason'   => 2,
+            'channels' => ['email'],
+            'expected' => false,
+            'dncLead'  => 1,
+        ];
+        yield [
+            'reason'   => 3,
+            'channels' => ['email'],
+            'expected' => false,
+            'dncLead'  => 1,
+        ];
+        yield [
+            'reason'   => 2,
+            'channels' => ['email'],
+            'expected' => true,
+            'dncLead'  => 2,
+        ];
+        yield [
+            'reason'   => null,
+            'channels' => ['email'],
+            'expected' => true,
+            'dncLead'  => 2,
+        ];
+        yield [
+            'reason'   => null,
+            'channels' => ['email'],
+            'expected' => false,
+            'dncLead'  => 0,
+        ];
+    }
+
+    /**
+     * @var array<string, string>
+     */
+    private array $configPageHit = [
+        'startDate'         => '2022-06-08 12:45:22.0',
+        'endDate'           => '2023-06-08 12:45:22.0',
+        'page'              => '1',
+        'page_url'          => '',
+        'accumulative_time' => '5',
+    ];
+
+    /**
+     * @var array<string, string>
+     */
+    private array $configUrlPageHit = [
+        'startDate'         => '',
+        'endDate'           => '',
+        'page'              => '',
+        'page_url'          => 'https://example.com',
+        'accumulative_time' => '5',
+    ];
+
+    /**
+     * @var array<string, string>
+     */
+    private array $configUrlPageHitWithoutSpentTime = [
+        'startDate'         => '',
+        'endDate'           => '',
+        'page'              => '',
+        'page_url'          => 'https://example.com',
+        'accumulative_time' => '',
+    ];
+
+    /**
+     * @var MockObject&LeadModel
+     */
+    private MockObject $mockLeadModel;
+
+    /**
+     * @var MockObject&CompanyModel
+     */
+    private MockObject $mockCompanyModel;
+
+    private CampaignSubscriber $subscriber;
+
+    /**
+     * @var MockObject&DoNotContact
+     */
+    private MockObject $doNotContact;
+
+    protected function setUp(): void
+    {
+        $this->mockLeadModel          = $this->createMock(LeadModel::class);
+        $this->mockCompanyModel       = $this->createMock(CompanyModel::class);
+        $this->doNotContact           = $this->createMock(DoNotContact::class);
+        $filterOperatorProvider       = new FilterOperatorProvider(
+            $this->createStub(EventDispatcherInterface::class),
+            $this->createStub(TranslatorInterface::class)
+        );
+        $mockCoreParametersHelper = $this->createMock(CoreParametersHelper::class);
+        $mockCoreParametersHelper->method('getDefaultTimezone')
+            ->willReturn('UTC');
+
+        $this->subscriber = new CampaignSubscriber(
+            $this->createStub(IpLookupHelper::class),
+            $this->mockLeadModel,
+            $this->createStub(FieldModel::class),
+            $this->mockCompanyModel,
+            $this->createStub(CampaignModel::class),
+            $mockCoreParametersHelper,
+            $this->doNotContact,
+            $this->createStub(PointGroupModel::class),
+            $filterOperatorProvider,
+            $this->createStub(LeadListRepository::class),
+            $this->createStub(LeadRepository::class),
+            $this->createStub(LeadFieldRepository::class)
+        );
+    }
+
+    public function testOnCampaignTriggerActiononUpdateCompany(): void
+    {
+        $companyEntityFrom   = $this->createMock(Company::class);
+        $companyEntityFrom->method('getId')
+            ->willReturn($this->configFrom['id']);
+        $companyEntityFrom->method('getName')
+            ->willReturn($this->configFrom['companyname']);
+
+        $companyEntityTo = $this->createMock(Company::class);
+        $companyEntityTo->method('getId')
+            ->willReturn($this->configTo['id']);
+        $companyEntityTo->method('getName')
+            ->willReturn($this->configTo['companyname']);
+        $companyEntityTo->method('getProfileFields')
+            ->willReturn($this->configTo);
+
+        $this->mockCompanyModel->expects($this->once())->method('getEntity')->willReturn($companyEntityFrom);
+
+        $mockCompanyLeadRepo  = $this->createMock(CompanyLeadRepository::class);
+        $mockCompanyLeadRepo->expects($this->once())->method('getCompaniesByLeadId')->willReturn([]);
+
+        $this->mockCompanyModel->expects($this->atLeastOnce())
+            ->method('getCompanyLeadRepository')
+            ->willReturn($mockCompanyLeadRepo);
+
+        $this->mockCompanyModel->expects($this->once())
+            ->method('checkForDuplicateCompanies')
+            ->willReturn([$companyEntityTo]);
+
+        $this->mockCompanyModel
+            ->method('fetchCompanyFields')
+            ->willReturn([['alias' => 'companyname']]);
+
+        $mockCoreParametersHelper = $this->createMock(CoreParametersHelper::class);
+        $mockCoreParametersHelper->method('get')
+            ->with('default_timezone')
+            ->willReturn('UTC');
+
+        $lead = new Lead();
+        $lead->setId(99);
+        $lead->setPrimaryCompany($this->configFrom);
+
+        $this->mockLeadModel->expects($this->once())->method('setPrimaryCompany')
+            ->willReturnCallback(
+                function () use ($lead): array {
+                    $lead->setPrimaryCompany($this->configTo);
+
+                    return ['oldPrimary' => $this->configTo['id'], 'newPrimary' => $this->configTo['id']];
+                }
+            );
+
+        $args = [
+            'lead'  => $lead,
+            'event' => [
+                'type'       => 'lead.updatecompany',
+                'properties' => $this->configTo,
+            ],
+            'eventDetails'    => [],
+            'systemTriggered' => true,
+            'eventSettings'   => [],
+        ];
+
+        $event = new CampaignExecutionEvent($args, true);
+        $this->subscriber->onCampaignTriggerActionUpdateCompany($event);
+        $this->assertTrue($event->getResult());
+
+        $primaryCompany = $lead->getPrimaryCompany();
+        $this->assertSame($this->configTo['companyname'], $primaryCompany['companyname']);
+    }
+
+    /**
+     * @param array<string> $channels
+     */
+    #[DataProvider('provideFormDNC')]
+    public function testOnCampaignTriggerConditionDNCFlag(?int $reason, array $channels, bool $expected, int $dncLead): void
+    {
+        $mockCoreParametersHelper = $this->createMock(CoreParametersHelper::class);
+        $mockCoreParametersHelper->method('get')
+            ->with('default_timezone')
+            ->willReturn('UTC');
+
+        $this->doNotContact->expects($this->once())->method('isContactable')->willReturn($dncLead);
+
+        $lead = new Lead();
+        $lead->setId(99);
+        $args = [
+            'lead'  => $lead,
+            'event' => [
+                'type'       => 'lead.dnc',
+                'properties' => [
+                    'reason'   => $reason,
+                    'channels' => $channels,
+                ],
+            ],
+            'eventDetails'    => [],
+            'systemTriggered' => true,
+            'eventSettings'   => [],
+        ];
+
+        $event = new CampaignExecutionEvent($args, true);
+        $this->subscriber->onCampaignTriggerCondition($event);
+        $this->assertSame($expected, $event->getResult());
+    }
+
+    public function testOnCampaignTriggerConditionLeadLandingPageHit(): void
+    {
+        $lead = new Lead();
+        $lead->setId(99);
+        $leadTimeline = [
+            0 => [
+                'events' => [
+                    0 => [
+                        'event'     => 'page.hit',
+                        'eventId'   => '5',
+                        'eventType' => 'Page hit',
+                        'timestamp' => new \DateTime('2022-06-08 12:45:22.0'),
+                        'contactId' => '1',
+                        'details'   => [
+                            'hit' => [
+                                'hitId'    => '5',
+                                'page_id'  => '1',
+                                'dateHit'  => new \DateTime('2022-06-08 12:45:22.0'),
+                                'dateLeft' => new \DateTime('2022-06-08 12:50:42.0'),
+                            ],
+                        ],
+                    ],
+                ],
+            ], ];
+
+        $this->mockLeadModel->expects($this->once())->method('getEngagements')->willReturn($leadTimeline);
+
+        $args = [
+            'lead'  => $lead,
+            'event' => [
+                'type'       => 'lead.pageHit',
+                'properties' => $this->configPageHit,
+            ],
+            'eventDetails'    => [],
+            'systemTriggered' => true,
+            'eventSettings'   => [],
+        ];
+
+        $event = new CampaignExecutionEvent($args, true);
+        $this->subscriber->onCampaignTriggerCondition($event);
+        $this->assertTrue($event->getResult());
+    }
+
+    public function testOnCampaignTriggerConditionLeadPageUrlHit(): void
+    {
+        $lead = new Lead();
+        $lead->setId(99);
+        $leadTimeline = [
+            0 => [
+                'events' => [
+                    0 => [
+                        'event'     => 'page.hit',
+                        'eventId'   => '5',
+                        'eventType' => 'Page hit',
+                        'timestamp' => new \DateTime('2022-06-08 12:45:22.0'),
+                        'contactId' => '1',
+                        'details'   => [
+                            'hit' => [
+                                'hitId'    => '5',
+                                'page_id'  => '',
+                                'dateHit'  => new \DateTime('2022-06-08 12:45:22.0'),
+                                'dateLeft' => new \DateTime('2022-06-08 12:50:42.0'),
+                                'url'      => 'https://example.com',
+                            ],
+                        ],
+                    ],
+                ],
+            ], ];
+
+        $this->mockLeadModel->expects($this->once())->method('getEngagements')->willReturn($leadTimeline);
+
+        $args = [
+            'lead'  => $lead,
+            'event' => [
+                'type'       => 'lead.pageHit',
+                'properties' => $this->configUrlPageHit,
+            ],
+            'eventDetails'    => [],
+            'systemTriggered' => true,
+            'eventSettings'   => [],
+        ];
+
+        $event = new CampaignExecutionEvent($args, true);
+        $this->subscriber->onCampaignTriggerCondition($event);
+        $this->assertTrue($event->getResult());
+    }
+
+    public function testOnCampaignTriggerConditionLeadPageUrlHitWithoutSpentTime(): void
+    {
+        $lead = new Lead();
+        $lead->setId(99);
+        $leadTimeline = [
+            0 => [
+                'events' => [
+                    0 => [
+                        'event'     => 'page.hit',
+                        'eventId'   => '5',
+                        'eventType' => 'Page hit',
+                        'timestamp' => new \DateTime('2022-06-08 12:45:22.0'),
+                        'contactId' => '1',
+                        'details'   => [
+                            'hit' => [
+                                'hitId'    => '5',
+                                'page_id'  => '',
+                                'dateHit'  => new \DateTime('2022-06-08 12:45:22.0'),
+                                'dateLeft' => new \DateTime('2022-06-08 12:50:42.0'),
+                                'url'      => 'https://example.com',
+                            ],
+                        ],
+                    ],
+                ],
+            ], ];
+
+        $this->mockLeadModel->expects($this->once())->method('getEngagements')->willReturn($leadTimeline);
+
+        $args = [
+            'lead'  => $lead,
+            'event' => [
+                'type'       => 'lead.pageHit',
+                'properties' => $this->configUrlPageHitWithoutSpentTime,
+            ],
+            'eventDetails'    => [],
+            'systemTriggered' => true,
+            'eventSettings'   => [],
+        ];
+
+        $event = new CampaignExecutionEvent($args, true);
+        $this->subscriber->onCampaignTriggerCondition($event);
+        $this->assertTrue($event->getResult());
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function pageUrlFilterProvider(): iterable
+    {
+        yield 'plain text substring' => ['example.com'];
+        yield 'legacy wildcard'      => ['*example.com*'];
+    }
+
+    #[DataProvider('pageUrlFilterProvider')]
+    public function testOnCampaignTriggerConditionLeadPageUrlHitMatchesUrlFilter(string $pageUrlFilter): void
+    {
+        $lead = new Lead();
+        $lead->setId(99);
+
+        $this->mockLeadModel->expects($this->once())
+            ->method('getEngagements')
+            ->willReturn($this->createPageHitTimeline('https://example.com/hello'));
+
+        $event = new CampaignExecutionEvent($this->createPageHitEventArgs($lead, $pageUrlFilter), true);
+        $this->subscriber->onCampaignTriggerCondition($event);
+        $this->assertTrue($event->getResult());
+    }
+
+    /**
+     * @return array<int, array<string, array<int, array<string, mixed>>>>
+     */
+    private function createPageHitTimeline(string $url): array
+    {
+        return [
+            0 => [
+                'events' => [
+                    0 => [
+                        'event'     => 'page.hit',
+                        'eventId'   => '5',
+                        'eventType' => 'Page hit',
+                        'timestamp' => new \DateTime('2022-06-08 12:45:22.0'),
+                        'contactId' => '1',
+                        'details'   => [
+                            'hit' => [
+                                'hitId'    => '5',
+                                'page_id'  => '',
+                                'dateHit'  => new \DateTime('2022-06-08 12:45:22.0'),
+                                'dateLeft' => new \DateTime('2022-06-08 12:50:42.0'),
+                                'url'      => $url,
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function createPageHitEventArgs(Lead $lead, string $pageUrlFilter): array
+    {
+        return [
+            'lead'  => $lead,
+            'event' => [
+                'type'       => 'lead.pageHit',
+                'properties' => [
+                    'startDate'         => '',
+                    'endDate'           => '',
+                    'page'              => '',
+                    'page_url'          => $pageUrlFilter,
+                    'accumulative_time' => '',
+                ],
+            ],
+            'eventDetails'    => [],
+            'systemTriggered' => true,
+            'eventSettings'   => [],
+        ];
+    }
+
+    public function testOnCampaignTriggerActionUpdateLead(): void
+    {
+        $eventAccessor = $this->createStub(ActionAccessor::class);
+        $properties    = [
+            'points' => 10,
+        ];
+        $event         = (new Event())->setProperties($properties);
+        $event->setType('lead.updatelead');
+        $lead          = (new Lead())->setEmail('tester@mautic.org');
+
+        $leadEventLog = $this->createMock(LeadEventLog::class);
+        $leadEventLog
+            ->method('getLead')
+            ->willReturn($lead);
+        $leadEventLog
+            ->method('getId')
+            ->willReturn(6);
+        $leadEventLog
+            ->method('setIsScheduled')
+            ->with(false)
+            ->willReturn($leadEventLog);
+
+        $logs = new ArrayCollection([$leadEventLog]);
+
+        $this->mockLeadModel->expects($this->exactly(2))
+            ->method('setFieldValues')
+            ->with($lead, $properties, false, true, false);
+
+        $this->mockLeadModel->expects($this->once())
+            ->method('saveEntity')
+            ->with($lead);
+
+        $pendingEvent = new PendingEvent($eventAccessor, $event, $logs);
+        $this->subscriber->onCampaignTriggerActionUpdateLead($pendingEvent);
+
+        $this->assertCount(1, $pendingEvent->getSuccessful());
+        $this->assertCount(0, $pendingEvent->getFailures());
+    }
+}

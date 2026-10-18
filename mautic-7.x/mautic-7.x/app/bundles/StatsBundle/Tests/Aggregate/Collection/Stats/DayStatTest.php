@@ -1,0 +1,66 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\StatsBundle\Tests\Aggregate\Collection\Stats;
+
+use Mautic\StatsBundle\Aggregate\Collection\Stats\DayStat;
+use Mautic\StatsBundle\Aggregate\Collection\Stats\HourStat;
+use PHPUnit\Framework\TestCase;
+
+final class DayStatTest extends TestCase
+{
+    private string $day = '2019-11-07';
+
+    private int $hour = 11;
+
+    private DayStat $dayStat;
+
+    private HourStat $hourStat;
+
+    protected function setUp(): void
+    {
+        $this->dayStat  = new DayStat($this->day);
+        $this->hourStat = $this->dayStat->getHour($this->hour);
+    }
+
+    public function testGetHour(): void
+    {
+        $this->assertSame("{$this->day} {$this->hour}", $this->hourStat->getHour());
+        $this->assertSame(0, $this->hourStat->getCount());
+
+        $this->hourStat = $this->dayStat->getHour($this->hour);
+
+        $this->assertSame($this->hourStat, $this->dayStat->getHour($this->hour));
+        $this->assertSame("{$this->day} {$this->hour}", $this->hourStat->getHour());
+        $this->assertSame(0, $this->hourStat->getCount());
+    }
+
+    public function testGetStats(): void
+    {
+        $result = $this->dayStat->getStats();
+        $this->assertSame(["{$this->day} {$this->hour}" => $this->hourStat], $result);
+    }
+
+    public function testGetSum(): void
+    {
+        $this->dayStat  = new DayStat($this->day);
+        $this->dayStat->getHour($this->hour);
+        $this->assertSame(1, $this->dayStat->getCount());
+        $this->dayStat->getHour($this->hour);
+        $this->assertSame(1, $this->dayStat->getCount());
+        $this->dayStat->getHour($this->hour + 1);
+        $this->assertSame(2, $this->dayStat->getCount());
+    }
+
+    public function testGetCount(): void
+    {
+        $this->dayStat  = new DayStat($this->day);
+        $this->dayStat->getHour($this->hour);
+        $this->assertSame(1, $this->dayStat->getCount());
+        $this->dayStat->getHour($this->hour);
+        $this->assertSame(1, $this->dayStat->getCount());
+        $this->dayStat->getHour($this->hour + 1);
+        $this->assertSame(2, $this->dayStat->getCount());
+    }
+}
