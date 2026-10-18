@@ -5,3 +5,8 @@ _drive_sources/
 __pycache__/
 *.pyc
 node_modules/
+
+# Generated Python packaging metadata
+agency-orchestrator/*.egg-info/
+# Workflow requires a token with GitHub Actions workflow permission
+.github/workflows/ci.yml

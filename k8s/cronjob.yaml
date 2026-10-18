@@ -1,0 +1,21 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: agency-orchestrator-cycle
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 1800
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: cycle
+              image: ghcr.io/rt400988-wq/powerfull-man-orchestrator:latest
+              command: ["/bin/sh", "-c"]
+              args: ["curl --fail --retry 3 -X POST http://orchestrator:8000/cycle"]
+              envFrom:
+                - secretRef: {name: agency-orchestrator-secrets}

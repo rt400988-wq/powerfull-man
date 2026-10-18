@@ -1,0 +1,9 @@
+{
+  "provider": "official_whatsapp_business_api",
+  "verify_token_env": "WHATSAPP_VERIFY_TOKEN",
+  "api_url_env": "WHATSAPP_API_URL",
+  "token_env": "WHATSAPP_TOKEN",
+  "blank_credentials_behavior": "manual_human_handshake",
+  "require_consent_status": ["opted_in", "consented", "test_consent"],
+  "never_contact_status": ["unknown", "opted_out", "do_not_contact"]
+}

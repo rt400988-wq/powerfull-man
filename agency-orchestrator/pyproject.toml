@@ -1,0 +1,25 @@
+[project]
+name = "agency-orchestrator"
+version = "0.1.0"
+description = "Consent-gated lead pipeline and agent operations dashboard"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
+  "psycopg[binary]>=3.2,<4",
+  "redis>=5,<6",
+  "python-dotenv>=1.0,<2",
+  "phonenumbers>=8.13,<9",
+  "dnspython>=2.6,<3",
+  "boto3>=1.35,<2",
+  "httpx>=0.27,<1",
+  "pydantic-settings>=2.5,<3",
+  "python-multipart>=0.0.9,<1",
+  "PyYAML>=6.0,<7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9", "pytest-asyncio>=0.24,<1"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

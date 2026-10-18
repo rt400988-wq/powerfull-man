@@ -1,0 +1,13 @@
+services:
+  orchestrator:
+    restart: unless-stopped
+    ports: ["127.0.0.1:8000:8000"]
+  postgres:
+    restart: unless-stopped
+    ports: []
+  redis:
+    restart: unless-stopped
+    ports: []
+  minio:
+    restart: unless-stopped
+    ports: []

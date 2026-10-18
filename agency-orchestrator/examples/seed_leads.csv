@@ -1,0 +1,2 @@
+first_name,last_name,company,role,email,phone,source,consent_status,do_not_contact
+Test,Lead,Example Business,Owner,test@example.com,+14155550123,manual_test,test_consent,false

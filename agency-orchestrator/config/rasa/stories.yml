@@ -1,0 +1,16 @@
+version: "3.1"
+stories:
+- story: consented qualification
+  steps:
+  - intent: greet
+  - action: utter_greet
+  - intent: provide_contact
+  - action: action_create_crm_task
+- story: human handoff
+  steps:
+  - intent: human
+  - action: action_route_to_human
+- story: opt out
+  steps:
+  - intent: opt_out
+  - action: action_route_to_human

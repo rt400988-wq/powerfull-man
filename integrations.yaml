@@ -1,0 +1,121 @@
+# Generated inventory of collected upstream projects. Verify commands against each upstream README before deployment.
+
+- name: SIP.js-main
+  path: ./SIP.js-main
+  start_command: npm install
+  ports:
+    []
+  env_file: null
+  dockerfile_present: false
+
+- name: SuiteCRM-hotfix
+  path: ./SuiteCRM-hotfix
+  start_command: php -S 0.0.0.0:8080
+  ports:
+    - 8080
+  env_file: null
+  dockerfile_present: false
+
+- name: TTS-dev
+  path: ./TTS-dev
+  start_command: python -m TTS
+  ports:
+    []
+  env_file: null
+  dockerfile_present: true
+
+- name: TTS-master
+  path: ./TTS-master
+  start_command: python -m TTS
+  ports:
+    []
+  env_file: null
+  dockerfile_present: false
+
+- name: asterisk-master
+  path: ./asterisk-master
+  start_command: ./configure && make
+  ports:
+    - 5060
+  env_file: null
+  dockerfile_present: false
+
+- name: email-verifier-main
+  path: ./email-verifier-main
+  start_command: npm install && npm start
+  ports:
+    []
+  env_file: null
+  dockerfile_present: false
+
+- name: erpnext-develop
+  path: ./erpnext-develop
+  start_command: bench start
+  ports:
+    - 8000
+  env_file: null
+  dockerfile_present: true
+
+- name: freeswitch-master
+  path: ./freeswitch-master
+  start_command: ./bootstrap.sh && ./configure && make
+  ports:
+    - 5060
+  env_file: null
+  dockerfile_present: true
+
+- name: mautic-7.x
+  path: ./mautic-7.x
+  start_command: php -S 0.0.0.0:8080
+  ports:
+    - 8080
+  env_file: null
+  dockerfile_present: false
+
+- name: playwright-main
+  path: ./playwright-main
+  start_command: npm install
+  ports:
+    []
+  env_file: null
+  dockerfile_present: false
+
+- name: postal-main
+  path: ./postal-main
+  start_command: bundle exec rake postal:start
+  ports:
+    - 5000
+  env_file: null
+  dockerfile_present: true
+
+- name: rasa-3.6.x
+  path: ./rasa-3.6.x
+  start_command: rasa run
+  ports:
+    - 5005
+  env_file: null
+  dockerfile_present: true
+
+- name: scrapy-master
+  path: ./scrapy-master
+  start_command: python -m scrapy
+  ports:
+    []
+  env_file: null
+  dockerfile_present: false
+
+- name: vosk-api-master
+  path: ./vosk-api-master
+  start_command: python -m vosk
+  ports:
+    []
+  env_file: null
+  dockerfile_present: false
+
+- name: whatsapp-web.js-main
+  path: ./whatsapp-web.js-main
+  start_command: npm install
+  ports:
+    []
+  env_file: null
+  dockerfile_present: false

@@ -1,0 +1,16 @@
+first_name: first_name
+last_name: last_name
+company: company
+role: role
+email: email
+phone: phone
+source: source
+consent_status: consent_status
+do_not_contact: do_not_contact
+
+policy:
+  allowed_sources: public_business_directories_only
+  allowed_consent_statuses: [opted_in, consented, test_consent]
+  blocked_statuses: [unknown, opted_out, do_not_contact]
+  max_outreach_retries: 3
+  cooldown_hours: 168

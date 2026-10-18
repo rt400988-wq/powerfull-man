@@ -1,0 +1,17 @@
+version: "3.1"
+intents: [greet, qualify, provide_contact, opt_out, human]
+responses:
+  utter_greet:
+    - text: "Hello. I can help qualify your business need. You may request a human at any time."
+  utter_consent:
+    - text: "Before continuing, may we use your business contact details for this conversation?"
+  utter_human:
+    - text: "A human agent will take over. No automated call will be placed without consent and disclosure."
+slots:
+  consent_status: {type: text, influence_conversation: true, mappings: [{type: from_text}]}
+  qualification: {type: text, influence_conversation: true, mappings: [{type: from_text}]}
+  requested_human: {type: bool, influence_conversation: true, mappings: [{type: from_intent, intent: human, value: true}]}
+actions: [action_create_crm_task, action_route_to_human]
+session_config:
+  session_expiration_time: 60
+  carry_over_slots_to_new_session: true

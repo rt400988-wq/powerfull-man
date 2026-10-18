@@ -1,0 +1,23 @@
+version: "3.1"
+nlu:
+- intent: greet
+  examples: |
+    - hello
+    - I want to learn more
+- intent: qualify
+  examples: |
+    - We need help with our operations
+    - I am interested in a business solution
+- intent: provide_contact
+  examples: |
+    - My email is test@example.com
+    - You can contact our business team
+- intent: opt_out
+  examples: |
+    - stop contacting me
+    - I do not want messages
+    - unsubscribe
+- intent: human
+  examples: |
+    - let me speak to a human
+    - connect me with an agent

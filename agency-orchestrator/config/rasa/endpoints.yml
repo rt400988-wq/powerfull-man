@@ -1,0 +1,7 @@
+action_endpoint:
+  url: http://orchestrator:8000/rasa/webhook
+tracker_store:
+  type: redis
+  url: redis
+  port: 6379
+  db: 1
